@@ -1,7 +1,25 @@
 import { Button } from "@/components/ui/button";
 import { Shield, AlertTriangle, Brain } from "lucide-react";
+import { useAuth } from "@clerk/clerk-react";
+import { useNavigate } from "react-router-dom";
 
 const HeroSection = () => {
+  const { isSignedIn } = useAuth();
+  const navigate = useNavigate();
+
+  const handleGetStarted = () => {
+    if (isSignedIn) {
+      navigate('/dashboard');
+    } else {
+      // Scroll to solutions section for non-authenticated users
+      document.getElementById('solutions')?.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  const handleLearnMore = () => {
+    document.getElementById('threats')?.scrollIntoView({ behavior: 'smooth' });
+  };
+
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
       {/* 3D Animated Background */}
@@ -51,10 +69,19 @@ const HeroSection = () => {
 
         {/* CTA Buttons */}
         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-          <Button variant="default" size="lg" className="glow-effect">
-            Explore Solutions
+          <Button 
+            variant="default" 
+            size="lg" 
+            className="glow-effect"
+            onClick={handleGetStarted}
+          >
+            {isSignedIn ? 'Go to Dashboard' : 'Explore Solutions'}
           </Button>
-          <Button variant="outline" size="lg">
+          <Button 
+            variant="outline" 
+            size="lg"
+            onClick={handleLearnMore}
+          >
             Learn About Threats
           </Button>
         </div>

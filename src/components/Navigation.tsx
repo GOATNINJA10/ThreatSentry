@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Menu, X, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SignInButton, SignUpButton, UserButton, useUser } from "@clerk/clerk-react";
 
 const Navigation = () => {
   const [isOpen, setIsOpen] = useState(false);
+  const { isSignedIn, user } = useUser();
 
   const navItems = [
     { label: "Threats", href: "#threats" },
@@ -40,8 +42,29 @@ const Navigation = () => {
 
           {/* Desktop CTA */}
           <div className="hidden md:flex items-center gap-4">
-            <Button variant="ghost">Sign In</Button>
-            <Button variant="default">Get Started</Button>
+            {!isSignedIn ? (
+              <>
+                <SignInButton mode="modal">
+                  <Button variant="ghost">Sign In</Button>
+                </SignInButton>
+                <SignUpButton mode="modal">
+                  <Button variant="default">Get Started</Button>
+                </SignUpButton>
+              </>
+            ) : (
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-muted-foreground">
+                  Welcome, {user?.firstName || 'User'}!
+                </span>
+                <UserButton 
+                  appearance={{
+                    elements: {
+                      avatarBox: "w-8 h-8"
+                    }
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Mobile Menu Button */}
@@ -68,8 +91,29 @@ const Navigation = () => {
                 </a>
               ))}
               <div className="pt-4 space-y-2">
-                <Button variant="ghost" className="w-full">Sign In</Button>
-                <Button variant="default" className="w-full">Get Started</Button>
+                {!isSignedIn ? (
+                  <>
+                    <SignInButton mode="modal">
+                      <Button variant="ghost" className="w-full">Sign In</Button>
+                    </SignInButton>
+                    <SignUpButton mode="modal">
+                      <Button variant="default" className="w-full">Get Started</Button>
+                    </SignUpButton>
+                  </>
+                ) : (
+                  <div className="flex items-center justify-between p-3 bg-secondary/50 rounded-lg">
+                    <span className="text-sm text-muted-foreground">
+                      Welcome, {user?.firstName || 'User'}!
+                    </span>
+                    <UserButton 
+                      appearance={{
+                        elements: {
+                          avatarBox: "w-8 h-8"
+                        }
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           </div>
