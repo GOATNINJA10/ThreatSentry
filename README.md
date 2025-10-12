@@ -2,7 +2,7 @@
 
 ## Project info
 
-**URL**: https://threatsentry.lovable.app
+**URL**: https://threat-sentry.vercel.app/
 
 ## How can I edit this code?
 
