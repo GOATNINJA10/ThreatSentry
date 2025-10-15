@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Shield, AlertTriangle, Brain } from "lucide-react";
 import { useAuth } from "@clerk/clerk-react";
 import { useNavigate } from "react-router-dom";
+import { motion } from "framer-motion";
 
 const HeroSection = () => {
   const { isSignedIn } = useAuth();
@@ -47,24 +48,78 @@ const HeroSection = () => {
       <div className="absolute inset-0 hero-gradient opacity-90" />
       
       {/* Content */}
-      <div className="relative z-10 max-w-6xl mx-auto px-6 text-center">
+      <motion.div 
+        className="relative z-10 max-w-6xl mx-auto px-6 text-center"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.8, ease: "easeOut" }}
+      >
         {/* Main Title */}
         <div className="mt-10">
-          <div className="flex items-center justify-center gap-4 mb-6">
-            <Shield className="w-12 h-12 text-accent" />
-            <Brain className="w-12 h-12 text-primary" />
-            <AlertTriangle className="w-12 h-12 text-threat" />
-          </div>
+          <motion.div 
+            className="flex items-center justify-center gap-4 mb-6"
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+          >
+            <motion.div
+              animate={{ 
+                rotate: [0, 360],
+                scale: [1, 1.1, 1]
+              }}
+              transition={{ 
+                duration: 4, 
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            >
+              <Shield className="w-12 h-12 text-accent" />
+            </motion.div>
+            <motion.div
+              animate={{ 
+                y: [0, -10, 0]
+              }}
+              transition={{ 
+                duration: 2, 
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            >
+              <Brain className="w-12 h-12 text-primary" />
+            </motion.div>
+            <motion.div
+              animate={{ 
+                rotate: [0, -10, 10, 0]
+              }}
+              transition={{ 
+                duration: 3, 
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            >
+              <AlertTriangle className="w-12 h-12 text-threat" />
+            </motion.div>
+          </motion.div>
           
-          <h1 className="text-5xl md:text-7xl font-bold mb-5">
+          <motion.h1 
+            className="text-5xl md:text-7xl font-bold mb-5"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.4 }}
+          >
             <span className="heading-gradient">Threat</span>
             <span className="text-foreground">Sentry</span>
-          </h1>
+          </motion.h1>
           
-          <p className="text-xl md:text-2xl text-muted-foreground max-w-4xl mx-auto leading-relaxed mb-3">
+          <motion.p 
+            className="text-xl md:text-2xl text-muted-foreground max-w-4xl mx-auto leading-relaxed mb-3"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.6 }}
+          >
             Identifying and mitigating adversarial threats in Machine Learning systems. 
             Safeguard your AI models from vulnerabilities and build robust, reliable, and ethical AI systems.
-          </p>
+          </motion.p>
         </div>
 
         {/* CTA Buttons */}
@@ -101,7 +156,7 @@ const HeroSection = () => {
             <p className="text-muted-foreground">Protection Coverage</p>
           </div>
         </div>
-      </div>
+      </motion.div>
     </section>
   );
 };

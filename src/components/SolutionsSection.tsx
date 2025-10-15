@@ -1,6 +1,9 @@
 import { Shield, Zap, Lock, RefreshCw, CheckCircle, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import defenseIcon from "@/assets/defense-icon.png";
+import { motion } from "framer-motion";
+import { useRef } from "react";
+import { useInView } from "framer-motion";
 
 const solutions = [
   {
@@ -51,13 +54,34 @@ const getColorStyles = (color: string) => {
 };
 
 const SolutionsSection = () => {
+  const ref = useRef(null);
+  const isInView = useInView(ref, { once: true, margin: "-100px" });
+
   return (
-    <section className="py-20 px-6 bg-secondary/10">
+    <section className="py-20 px-6 bg-secondary/10" ref={ref}>
       <div className="max-w-7xl mx-auto">
         {/* Section Header */}
-        <div className="text-center mb-20">
+        <motion.div 
+          className="text-center mb-20"
+          initial={{ opacity: 0, y: 50 }}
+          animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 50 }}
+          transition={{ duration: 0.6 }}
+        >
           <div className="flex justify-center mb-8">
-            <img src={defenseIcon} alt="Defense Solutions" className="w-20 h-20" />
+            <motion.img 
+              src={defenseIcon} 
+              alt="Defense Solutions" 
+              className="w-20 h-20"
+              animate={isInView ? { 
+                rotate: [0, 360],
+                scale: [1, 1.1, 1]
+              } : {}}
+              transition={{ 
+                duration: 4,
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            />
           </div>
           <h2 className="text-4xl md:text-5xl font-bold mb-8 leading-tight">
             <span className="heading-gradient">Comprehensive</span> Defense Solutions
@@ -66,14 +90,21 @@ const SolutionsSection = () => {
             ThreatSentry provides a complete suite of tools and techniques to protect your machine learning 
             systems from adversarial attacks and ensure robust, reliable AI deployment.
           </p>
-        </div>
+        </motion.div>
 
         {/* Solutions Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-10 mb-20">
-          {solutions.map((solution) => {
+          {solutions.map((solution, index) => {
             const IconComponent = solution.icon;
             return (
-              <div key={solution.id} className="threat-card card-hover rounded-2xl p-8">
+              <motion.div 
+                key={solution.id} 
+                className="threat-card card-hover rounded-2xl p-8"
+                initial={{ opacity: 0, y: 50 }}
+                animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 50 }}
+                transition={{ duration: 0.5, delay: index * 0.1 }}
+                whileHover={{ scale: 1.02, y: -5 }}
+              >
                 <div className="flex items-start gap-6 mb-8">
                   <div className={`w-12 h-12 rounded-xl border-2 flex items-center justify-center ${getColorStyles(solution.color)}`}>
                     <IconComponent className="w-6 h-6" />
@@ -104,38 +135,70 @@ const SolutionsSection = () => {
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                   </Button>
                 </div>
-              </div>
+              </motion.div>
             );
           })}
         </div>
 
         {/* Feature Highlights */}
-        <div className="threat-card text-center glow-effect rounded-2xl p-10">
+        <motion.div 
+          className="threat-card text-center glow-effect rounded-2xl p-10"
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={isInView ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.95 }}
+          transition={{ duration: 0.6, delay: 0.4 }}
+        >
           <h3 className="text-3xl font-bold mb-8">Why Choose ThreatSentry?</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-12 mt-10">
-            <div className="space-y-4">
-              <div className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center mx-auto mb-6 shadow-lg">
+          <motion.div className="grid grid-cols-1 md:grid-cols-3 gap-12 mt-10">
+            <motion.div 
+              className="space-y-4"
+              initial={{ opacity: 0, y: 30 }}
+              animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 30 }}
+              transition={{ duration: 0.5, delay: 0.5 }}
+            >
+              <motion.div 
+                className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center mx-auto mb-6 shadow-lg"
+                whileHover={{ scale: 1.1, rotate: 360 }}
+                transition={{ duration: 0.6 }}
+              >
                 <Shield className="w-10 h-10 text-primary" />
-              </div>
+              </motion.div>
               <h4 className="font-bold mb-3 text-lg">Enterprise-Grade Security</h4>
               <p className="text-base text-muted-foreground leading-relaxed">Military-grade protection for your most critical AI assets</p>
-            </div>
-            <div className="space-y-4">
-              <div className="w-20 h-20 rounded-full bg-accent/20 flex items-center justify-center mx-auto mb-6 shadow-lg">
+            </motion.div>
+            <motion.div 
+              className="space-y-4"
+              initial={{ opacity: 0, y: 30 }}
+              animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 30 }}
+              transition={{ duration: 0.5, delay: 0.6 }}
+            >
+              <motion.div 
+                className="w-20 h-20 rounded-full bg-accent/20 flex items-center justify-center mx-auto mb-6 shadow-lg"
+                whileHover={{ scale: 1.1, rotate: 360 }}
+                transition={{ duration: 0.6 }}
+              >
                 <Zap className="w-10 h-10 text-accent" />
-              </div>
+              </motion.div>
               <h4 className="font-bold mb-3 text-lg">Real-time Response</h4>
               <p className="text-base text-muted-foreground leading-relaxed">Instant threat detection and automated countermeasures</p>
-            </div>
-            <div className="space-y-4">
-              <div className="w-20 h-20 rounded-full bg-success/20 flex items-center justify-center mx-auto mb-6 shadow-lg">
+            </motion.div>
+            <motion.div 
+              className="space-y-4"
+              initial={{ opacity: 0, y: 30 }}
+              animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 30 }}
+              transition={{ duration: 0.5, delay: 0.7 }}
+            >
+              <motion.div 
+                className="w-20 h-20 rounded-full bg-success/20 flex items-center justify-center mx-auto mb-6 shadow-lg"
+                whileHover={{ scale: 1.1, rotate: 360 }}
+                transition={{ duration: 0.6 }}
+              >
                 <CheckCircle className="w-10 h-10 text-success" />
-              </div>
+              </motion.div>
               <h4 className="font-bold mb-3 text-lg">Proven Results</h4>
               <p className="text-base text-muted-foreground leading-relaxed">99.9% threat detection accuracy across all attack vectors</p>
-            </div>
-          </div>
-        </div>
+            </motion.div>
+          </motion.div>
+        </motion.div>
       </div>
     </section>
   );

@@ -1,5 +1,8 @@
 import { AlertTriangle, Target, Database, Eye, Key } from "lucide-react";
 import threatIcon from "@/assets/threat-icon.png";
+import { motion } from "framer-motion";
+import { useRef } from "react";
+import { useInView } from "framer-motion";
 
 const threats = [
   {
@@ -50,13 +53,34 @@ const getSeverityStyles = (severity: string) => {
 };
 
 const ThreatSection = () => {
+  const ref = useRef(null);
+  const isInView = useInView(ref, { once: true, margin: "-100px" });
+
   return (
-    <section className="py-20 px-6">
+    <section className="py-20 px-6" ref={ref}>
       <div className="max-w-7xl mx-auto">
         {/* Section Header */}
-        <div className="text-center mb-20">
+        <motion.div 
+          className="text-center mb-20"
+          initial={{ opacity: 0, y: 50 }}
+          animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 50 }}
+          transition={{ duration: 0.6 }}
+        >
           <div className="flex justify-center mb-8">
-            <img src={threatIcon} alt="Threat Detection" className="w-20 h-20" />
+            <motion.img 
+              src={threatIcon} 
+              alt="Threat Detection" 
+              className="w-20 h-20"
+              animate={isInView ? { 
+                rotate: [0, 10, -10, 0],
+                scale: [1, 1.1, 1]
+              } : {}}
+              transition={{ 
+                duration: 3,
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            />
           </div>
           <h2 className="text-4xl md:text-5xl font-bold mb-8 leading-tight">
             <span className="text-threat">Adversarial</span> Threats in ML
@@ -65,16 +89,20 @@ const ThreatSection = () => {
             Understanding the landscape of machine learning vulnerabilities is crucial for building secure AI systems. 
             These are the primary threat vectors targeting your models.
           </p>
-        </div>
+        </motion.div>
 
         {/* Threats Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-          {threats.map((threat) => {
+          {threats.map((threat, index) => {
             const IconComponent = threat.icon;
             return (
-              <div
+              <motion.div
                 key={threat.id}
                 className={`${getSeverityStyles(threat.severity)} card-hover rounded-2xl p-8`}
+                initial={{ opacity: 0, y: 50 }}
+                animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 50 }}
+                transition={{ duration: 0.5, delay: index * 0.1 }}
+                whileHover={{ scale: 1.02, y: -5 }}
               >
                 <div className="flex items-start gap-6">
                   <div className="flex-shrink-0">
@@ -112,13 +140,18 @@ const ThreatSection = () => {
                     </div>
                   </div>
                 </div>
-              </div>
+              </motion.div>
             );
           })}
         </div>
 
         {/* Call to Action */}
-        <div className="mt-20 text-center">
+        <motion.div 
+          className="mt-20 text-center"
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={isInView ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.95 }}
+          transition={{ duration: 0.6, delay: 0.4 }}
+        >
           <div className="threat-card max-w-2xl mx-auto rounded-2xl p-10">
             <AlertTriangle className="w-16 h-16 text-threat mx-auto mb-6" />
             <h3 className="text-3xl font-bold mb-6">Don't Let Your Models Be Vulnerable</h3>
@@ -134,7 +167,7 @@ const ThreatSection = () => {
               </button>
             </div>
           </div>
-        </div>
+        </motion.div>
       </div>
     </section>
   );
