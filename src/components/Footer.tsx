@@ -116,7 +116,7 @@ const Footer = () => {
           transition={{ duration: 0.6, delay: 0.5 }}
         >
           <div className="text-muted-foreground text-sm">
-            © 2024 ThreatSentry. Securing the future of AI.
+            © 2025 ThreatSentry. Securing the future of AI.
           </div>
           <div className="flex gap-6 text-sm">
             <motion.a 
