@@ -168,7 +168,10 @@ const Dashboard = () => {
               Quick Actions
             </h2>
             <div className="space-y-4">
-              <Button className="w-full justify-start gap-3 h-12">
+              <Button 
+                className="w-full justify-start gap-3 h-12"
+                onClick={() => navigate('/threat-assessment')}
+              >
                 <Target className="w-5 h-5" />
                 Run Threat Assessment
               </Button>
