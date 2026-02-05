@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Home, Target, Shield, AlertTriangle, Loader2, CheckCircle2, XCircle, Info, Download } from "lucide-react";
+import { ArrowLeft, Home, Target, Shield, AlertTriangle, Loader2, CheckCircle2, XCircle, Info, Download, Upload, Trash2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 
 interface AttackResult {
   attack_type: string;
@@ -28,14 +30,172 @@ interface AttackResult {
   details: string;
 }
 
+interface CustomModel {
+  id: string;
+  name: string;
+  description: string;
+  filename: string;
+  original_filename: string;
+  file_type: string;
+  num_classes: number;
+  input_size: number;
+  upload_date: string;
+  file_size: number;
+}
+
 const ThreatAssessment = () => {
   const navigate = useNavigate();
   const [modelId, setModelId] = useState("");
+  const [modelSource, setModelSource] = useState<"huggingface" | "custom">("huggingface");
   const [selectedAttack, setSelectedAttack] = useState("fgsm");
   const [isRunning, setIsRunning] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<AttackResult | null>(null);
+  
+  // Custom model states
+  const [customModels, setCustomModels] = useState<CustomModel[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadDescription, setUploadDescription] = useState("");
+  const [uploadNumClasses, setUploadNumClasses] = useState("1000");
+  const [uploadInputSize, setUploadInputSize] = useState("224");
+  const [isUploading, setIsUploading] = useState(false);
+
+  // Load custom models on mount
+  useEffect(() => {
+    if (modelSource === "custom") {
+      loadCustomModels();
+    }
+  }, [modelSource]);
+
+  const loadCustomModels = async () => {
+    setIsLoadingModels(true);
+    try {
+      const response = await fetch("http://localhost:5000/api/models/list");
+      const data = await response.json();
+      
+      if (data.success) {
+        setCustomModels(data.models);
+      } else {
+        toast.error("Failed to load custom models");
+      }
+    } catch (error) {
+      console.error("Error loading models:", error);
+      toast.error("Failed to load custom models. Make sure the backend is running.");
+    } finally {
+      setIsLoadingModels(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const validExtensions = ['.pt', '.pth', '.h5', '.keras'];
+      const fileExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+      
+      if (!validExtensions.includes(fileExt)) {
+        toast.error("Invalid file type", {
+          description: "Please upload a .pt, .pth, .h5, or .keras file"
+        });
+        return;
+      }
+      
+      setUploadFile(file);
+      // Set default name from filename
+      if (!uploadName) {
+        setUploadName(file.name.replace(/\.[^/.]+$/, ""));
+      }
+    }
+  };
+
+  const handleUploadModel = async () => {
+    if (!uploadFile) {
+      toast.error("Please select a file to upload");
+      return;
+    }
+
+    if (!uploadName.trim()) {
+      toast.error("Please enter a model name");
+      return;
+    }
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append('file', uploadFile);
+    formData.append('name', uploadName);
+    formData.append('description', uploadDescription);
+    formData.append('num_classes', uploadNumClasses);
+    formData.append('input_size', uploadInputSize);
+
+    try {
+      const response = await fetch("http://localhost:5000/api/models/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        toast.success("Model uploaded successfully!", {
+          description: `Model "${uploadName}" is ready to use`
+        });
+        
+        // Reset form
+        setUploadFile(null);
+        setUploadName("");
+        setUploadDescription("");
+        setUploadNumClasses("1000");
+        setUploadInputSize("224");
+        setIsUploadDialogOpen(false);
+        
+        // Reload models list
+        loadCustomModels();
+      } else {
+        toast.error("Upload failed", {
+          description: data.message || "Failed to upload model"
+        });
+      }
+    } catch (error) {
+      console.error("Error uploading model:", error);
+      toast.error("Upload failed", {
+        description: "Failed to upload model. Make sure the backend is running."
+      });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleDeleteModel = async (modelId: string, modelName: string) => {
+    if (!confirm(`Are you sure you want to delete "${modelName}"?`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://localhost:5000/api/models/delete/${modelId}`, {
+        method: "DELETE",
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        toast.success("Model deleted successfully");
+        loadCustomModels();
+        
+        // Clear selection if deleted model was selected
+        if (modelId === modelId) {
+          setModelId("");
+        }
+      } else {
+        toast.error("Failed to delete model");
+      }
+    } catch (error) {
+      console.error("Error deleting model:", error);
+      toast.error("Failed to delete model");
+    }
+  };
 
   const attackTypes = [
     {
@@ -111,7 +271,7 @@ const ThreatAssessment = () => {
 
   const runThreatAssessment = async () => {
     if (!modelId.trim()) {
-      toast.error("Please enter a Hugging Face model ID");
+      toast.error(modelSource === "huggingface" ? "Please enter a Hugging Face model ID" : "Please select a custom model");
       return;
     }
 
@@ -133,6 +293,7 @@ const ThreatAssessment = () => {
         body: JSON.stringify({
           model_id: modelId,
           attack_type: selectedAttack,
+          model_source: modelSource,
         }),
       });
 
@@ -244,37 +405,160 @@ const ThreatAssessment = () => {
               </div>
               
               <div className="space-y-6">
-                {/* Model Input */}
+                {/* Model Source Selection */}
                 <div>
-                  <Label htmlFor="model-id" className="text-sm font-medium mb-2 block">
-                    Hugging Face Model ID
+                  <Label className="text-sm font-medium mb-2 block">
+                    Model Source
                   </Label>
-                  <Input
-                    id="model-id"
-                    placeholder="e.g., google/vit-base-patch16-224"
-                    value={modelId}
-                    onChange={(e) => setModelId(e.target.value)}
-                    disabled={isRunning}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Enter the model ID from Hugging Face Hub
-                  </p>
-                  
-                  {/* Quick Model Suggestions */}
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {["google/vit-base-patch16-224", "microsoft/resnet-50", "facebook/convnext-tiny-224"].map((suggestion) => (
-                      <button
-                        key={suggestion}
-                        type="button"
-                        onClick={() => setModelId(suggestion)}
-                        disabled={isRunning}
-                        className="text-xs px-2 py-1 rounded bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {suggestion.split('/')[1]?.substring(0, 15)}...
-                      </button>
-                    ))}
-                  </div>
+                  <Select value={modelSource} onValueChange={(value: "huggingface" | "custom") => {
+                    setModelSource(value);
+                    setModelId("");
+                  }} disabled={isRunning}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="huggingface">Hugging Face Hub</SelectItem>
+                      <SelectItem value="custom">Custom Model (.pt/.h5)</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
+
+                {/* Hugging Face Model Input */}
+                {modelSource === "huggingface" && (
+                  <div>
+                    <Label htmlFor="model-id" className="text-sm font-medium mb-2 block">
+                      Hugging Face Model ID
+                    </Label>
+                    <Input
+                      id="model-id"
+                      placeholder="e.g., google/vit-base-patch16-224"
+                      value={modelId}
+                      onChange={(e) => setModelId(e.target.value)}
+                      disabled={isRunning}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Enter the model ID from Hugging Face Hub
+                    </p>
+                    
+                    {/* Quick Model Suggestions */}
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {["google/vit-base-patch16-224", "microsoft/resnet-50", "facebook/convnext-tiny-224"].map((suggestion) => (
+                        <button
+                          key={suggestion}
+                          type="button"
+                          onClick={() => setModelId(suggestion)}
+                          disabled={isRunning}
+                          className="text-xs px-2 py-1 rounded bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {suggestion.split('/')[1]?.substring(0, 15)}...
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Custom Model Selection */}
+                {modelSource === "custom" && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm font-medium">
+                        Select Custom Model
+                      </Label>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={loadCustomModels}
+                          disabled={isLoadingModels || isRunning}
+                          className="h-8 gap-1"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isLoadingModels ? 'animate-spin' : ''}`} />
+                          Refresh
+                        </Button>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={() => setIsUploadDialogOpen(true)}
+                          disabled={isRunning}
+                          className="h-8 gap-1"
+                        >
+                          <Upload className="w-3 h-3" />
+                          Upload
+                        </Button>
+                      </div>
+                    </div>
+
+                    {isLoadingModels ? (
+                      <div className="flex items-center justify-center py-8">
+                        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : customModels.length === 0 ? (
+                      <Card className="p-6 text-center border-dashed">
+                        <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground opacity-50" />
+                        <p className="text-sm text-muted-foreground mb-3">
+                          No custom models uploaded yet
+                        </p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setIsUploadDialogOpen(true)}
+                          className="gap-2"
+                        >
+                          <Upload className="w-4 h-4" />
+                          Upload Your First Model
+                        </Button>
+                      </Card>
+                    ) : (
+                      <div className="space-y-2 max-h-80 overflow-y-auto">
+                        {customModels.map((model) => (
+                          <Card
+                            key={model.id}
+                            className={`p-3 cursor-pointer transition-all ${
+                              modelId === model.id
+                                ? 'ring-2 ring-primary bg-primary/5'
+                                : 'hover:bg-secondary/50'
+                            }`}
+                            onClick={() => !isRunning && setModelId(model.id)}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h4 className="font-medium text-sm truncate">{model.name}</h4>
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">
+                                    .{model.file_type}
+                                  </span>
+                                </div>
+                                {model.description && (
+                                  <p className="text-xs text-muted-foreground line-clamp-2 mb-2">
+                                    {model.description}
+                                  </p>
+                                )}
+                                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                  <span>Classes: {model.num_classes}</span>
+                                  <span>Input: {model.input_size}x{model.input_size}</span>
+                                  <span>Size: {(model.file_size / 1024 / 1024).toFixed(1)} MB</span>
+                                </div>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteModel(model.id, model.name);
+                                }}
+                                disabled={isRunning}
+                                className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive flex-shrink-0"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </Card>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Attack Type Selection */}
                 <div>
@@ -518,6 +802,128 @@ const ThreatAssessment = () => {
             </Tabs>
           </div>
         </div>
+
+        {/* Upload Model Dialog */}
+        <Dialog open={isUploadDialogOpen} onOpenChange={setIsUploadDialogOpen}>
+          <DialogContent className="sm:max-w-[500px]">
+            <DialogHeader>
+              <DialogTitle>Upload Custom Model</DialogTitle>
+              <DialogDescription>
+                Upload a PyTorch (.pt, .pth) or Keras (.h5, .keras) model file for threat assessment.
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-4 py-4">
+              {/* File Input */}
+              <div>
+                <Label htmlFor="file-upload" className="text-sm font-medium mb-2 block">
+                  Model File *
+                </Label>
+                <Input
+                  id="file-upload"
+                  type="file"
+                  accept=".pt,.pth,.h5,.keras"
+                  onChange={handleFileSelect}
+                  disabled={isUploading}
+                />
+                {uploadFile && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Selected: {uploadFile.name} ({(uploadFile.size / 1024 / 1024).toFixed(2)} MB)
+                  </p>
+                )}
+              </div>
+
+              {/* Model Name */}
+              <div>
+                <Label htmlFor="model-name" className="text-sm font-medium mb-2 block">
+                  Model Name *
+                </Label>
+                <Input
+                  id="model-name"
+                  placeholder="e.g., My Custom ResNet"
+                  value={uploadName}
+                  onChange={(e) => setUploadName(e.target.value)}
+                  disabled={isUploading}
+                />
+              </div>
+
+              {/* Description */}
+              <div>
+                <Label htmlFor="model-description" className="text-sm font-medium mb-2 block">
+                  Description (Optional)
+                </Label>
+                <Textarea
+                  id="model-description"
+                  placeholder="Brief description of your model..."
+                  value={uploadDescription}
+                  onChange={(e) => setUploadDescription(e.target.value)}
+                  disabled={isUploading}
+                  rows={3}
+                />
+              </div>
+
+              {/* Advanced Options */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="num-classes" className="text-sm font-medium mb-2 block">
+                    Number of Classes
+                  </Label>
+                  <Input
+                    id="num-classes"
+                    type="number"
+                    placeholder="1000"
+                    value={uploadNumClasses}
+                    onChange={(e) => setUploadNumClasses(e.target.value)}
+                    disabled={isUploading}
+                    min="2"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="input-size" className="text-sm font-medium mb-2 block">
+                    Input Size (px)
+                  </Label>
+                  <Input
+                    id="input-size"
+                    type="number"
+                    placeholder="224"
+                    value={uploadInputSize}
+                    onChange={(e) => setUploadInputSize(e.target.value)}
+                    disabled={isUploading}
+                    min="32"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setIsUploadDialogOpen(false)}
+                disabled={isUploading}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleUploadModel}
+                disabled={isUploading || !uploadFile || !uploadName.trim()}
+                className="gap-2"
+              >
+                {isUploading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    Upload Model
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
