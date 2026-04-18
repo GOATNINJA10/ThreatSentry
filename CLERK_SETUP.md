@@ -21,6 +21,9 @@ Follow these steps to configure Clerk authentication in your ThreatSentry applic
 ```env
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_actual_publishable_key_here
 CLERK_SECRET_KEY=sk_test_your_actual_secret_key_here
+CLERK_JWKS_URL=https://your-clerk-domain/.well-known/jwks.json
+CLERK_ISSUER=https://your-clerk-domain
+VITE_BACKEND_URL=http://localhost:5000
 ```
 
 ### 4. Start Your Development Server

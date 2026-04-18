@@ -1,5 +1,9 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+from functools import wraps
+from dotenv import load_dotenv
+import jwt
+from jwt import PyJWKClient
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,13 +24,22 @@ from matplotlib.backends.backend_pdf import PdfPages
 from datetime import datetime
 from werkzeug.utils import secure_filename
 import json
+import textwrap
 
 # Suppress specific transformers warnings
 warnings.filterwarnings('ignore', message='Could not find image processor class')
 
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
 app = Flask(__name__)
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
+
+# Clerk JWT verification settings
+CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
+CLERK_ISSUER = os.getenv("CLERK_ISSUER")
+CLERK_AUDIENCE = os.getenv("CLERK_AUDIENCE")
+CLERK_JWKS_CLIENT = PyJWKClient(CLERK_JWKS_URL) if CLERK_JWKS_URL else None
 
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -48,6 +61,45 @@ ALLOWED_EXTENSIONS = {'pt', 'pth', 'h5', 'keras'}
 def allowed_file(filename):
     """Check if file has allowed extension"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def verify_clerk_jwt(token):
+    if not CLERK_JWKS_CLIENT:
+        raise Exception("CLERK_JWKS_URL is not configured")
+
+    signing_key = CLERK_JWKS_CLIENT.get_signing_key_from_jwt(token).key
+    options = {
+        "verify_aud": bool(CLERK_AUDIENCE),
+        "verify_iss": bool(CLERK_ISSUER)
+    }
+
+    return jwt.decode(
+        token,
+        signing_key,
+        algorithms=["RS256"],
+        audience=CLERK_AUDIENCE,
+        issuer=CLERK_ISSUER,
+        options=options
+    )
+
+def require_clerk_auth(handler):
+    @wraps(handler)
+    def wrapper(*args, **kwargs):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Unauthorized", "message": "Missing Bearer token"}), 401
+
+        token = auth_header.split(" ", 1)[1].strip()
+        if not token:
+            return jsonify({"error": "Unauthorized", "message": "Empty Bearer token"}), 401
+
+        try:
+            request.clerk_claims = verify_clerk_jwt(token)
+        except Exception as exc:
+            return jsonify({"error": "Unauthorized", "message": str(exc)}), 401
+
+        return handler(*args, **kwargs)
+
+    return wrapper
 
 def load_models_metadata():
     """Load models metadata from JSON file"""
@@ -278,7 +330,7 @@ def create_default_processor(input_size=224):
     
     return DefaultProcessor(input_size)
 
-def get_random_images(num_images=50):
+def get_random_images(num_images=10):
     """Get random images from the attack folder"""
     if not os.path.exists(ATTACK_IMAGES_FOLDER):
         os.makedirs(ATTACK_IMAGES_FOLDER)
@@ -297,6 +349,25 @@ def get_random_images(num_images=50):
     selected_images = random.sample(all_images, num_to_select)
     
     return [os.path.join(ATTACK_IMAGES_FOLDER, img) for img in selected_images]
+
+def resolve_prediction_label(label_map, class_index):
+    """Return a human-friendly class label for report output."""
+    if isinstance(label_map, dict):
+        if class_index in label_map:
+            return str(label_map[class_index])
+        class_index_str = str(class_index)
+        if class_index_str in label_map:
+            return str(label_map[class_index_str])
+    return f"Class {class_index}"
+
+def resolve_attack_image_path(image_name):
+    """Resolve an attack image name to a local file path if it still exists."""
+    if not image_name:
+        return None
+
+    safe_name = os.path.basename(image_name)
+    candidate = os.path.join(ATTACK_IMAGES_FOLDER, safe_name)
+    return candidate if os.path.exists(candidate) else None
 
 class AdversarialAttacks:
     def __init__(self, model, processor):
@@ -478,6 +549,7 @@ class AdversarialAttacks:
             }
 
 @app.route('/api/threat-assessment', methods=['POST'])
+@require_clerk_auth
 def threat_assessment():
     try:
         # Get parameters
@@ -490,7 +562,7 @@ def threat_assessment():
             return jsonify({'error': 'Missing model_id'}), 400
         
         # Get random images from attack folder
-        image_paths = get_random_images(50)
+        image_paths = get_random_images(10)
         
         if not image_paths:
             return jsonify({
@@ -550,6 +622,7 @@ def threat_assessment():
                 model = AutoModelForImageClassification.from_pretrained(model_id)
                 print(f"✅ Hugging Face model loaded successfully")
                 
+            label_map = getattr(getattr(model, 'config', None), 'id2label', {}) or {}
         except OSError as e:
             error_msg = str(e)
             if "does not appear to have a file named preprocessor_config.json" in error_msg or "does not appear to have a file named config.json" in error_msg:
@@ -623,7 +696,9 @@ def threat_assessment():
                     'image_name': os.path.basename(image_path),
                     'success': eval_results['success'],
                     'original_pred': eval_results['original_pred'],
+                    'original_label': resolve_prediction_label(label_map, eval_results['original_pred']),
                     'adversarial_pred': eval_results['adversarial_pred'],
+                    'adversarial_label': resolve_prediction_label(label_map, eval_results['adversarial_pred']),
                     'original_confidence': eval_results['original_confidence'] * 100,
                     'adversarial_confidence': eval_results['adversarial_confidence'] * 100
                 })
@@ -703,36 +778,40 @@ def generate_report_pdf(results, model_id):
     filename = f"threat_assessment_report_{timestamp}.pdf"
     filepath = os.path.join(os.path.dirname(__file__), filename)
     
+    def add_page_header(fig, title, subtitle=None):
+        fig.text(0.06, 0.95, title, fontsize=20, fontweight='bold', color='#0f172a')
+        if subtitle:
+            fig.text(0.06, 0.92, subtitle, fontsize=10, color='#475569')
+        fig.lines.append(plt.Line2D([0.06, 0.94], [0.905, 0.905], transform=fig.transFigure,
+                                    color='#cbd5e1', linewidth=1.2))
+
+    def add_footer(fig):
+        fig.text(0.06, 0.03, 'ThreatSentry | Threat Assessment Report', fontsize=8, color='#64748b')
+        fig.text(0.94, 0.03, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                 fontsize=8, color='#64748b', ha='right')
+
+    def draw_summary_card(fig, x, y, w, h, title, value, accent, subtitle=None):
+        rect = plt.Rectangle((x, y), w, h, transform=fig.transFigure,
+                             facecolor='#f8fafc', edgecolor='#cbd5e1', linewidth=1.2)
+        fig.patches.append(rect)
+        fig.patches.append(plt.Rectangle((x, y + h - 0.012), w, 0.012, transform=fig.transFigure,
+                                         facecolor=accent, edgecolor=accent, linewidth=0))
+        fig.text(x + 0.02, y + h - 0.055, title, fontsize=10, color='#475569', fontweight='bold')
+        fig.text(x + 0.02, y + 0.045, value, fontsize=18, color='#0f172a', fontweight='bold')
+        if subtitle:
+            fig.text(x + 0.02, y + 0.02, subtitle, fontsize=8.5, color='#64748b')
+
+    image_results = results.get('image_results', [])
+
     with PdfPages(filepath) as pdf:
         # Page 1: Title and Overview
         fig = plt.figure(figsize=(11, 8.5))
-        fig.suptitle('ThreatSentry - Threat Assessment Report', fontsize=24, fontweight='bold', y=0.98)
-        
-        # Add metadata
-        plt.text(0.5, 0.88, f"Model: {model_id}", ha='center', fontsize=14, fontweight='bold')
-        plt.text(0.5, 0.83, f"Attack Type: {results['attack_type']}", ha='center', fontsize=12)
-        plt.text(0.5, 0.78, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 
-                ha='center', fontsize=10, style='italic', color='gray')
-        
-        # Key Metrics Box
-        plt.text(0.5, 0.70, "Key Metrics", ha='center', fontsize=16, fontweight='bold')
-        
-        metrics_y = 0.62
-        metrics = [
-            ("Attack Success Rate", f"{results['success_rate']:.1f}%"),
-            ("Original Accuracy", f"{results['original_accuracy']:.2f}%"),
-            ("Adversarial Accuracy", f"{results['adversarial_accuracy']:.2f}%"),
-            ("Accuracy Drop", f"{results['original_accuracy'] - results['adversarial_accuracy']:.2f}%"),
-            ("Execution Time", f"{results['execution_time']:.2f}s"),
-            ("Images Tested", str(results['num_images']))
-        ]
-        
-        for label, value in metrics:
-            plt.text(0.3, metrics_y, label + ":", fontsize=12, fontweight='bold')
-            plt.text(0.7, metrics_y, value, fontsize=12, ha='right')
-            metrics_y -= 0.06
-        
-        # Threat Level Assessment
+        add_page_header(fig, 'Threat Assessment Report', 'Executive summary for model robustness under adversarial attack')
+
+        fig.text(0.06, 0.84, f"Model: {model_id}", fontsize=16, fontweight='bold', color='#0f172a')
+        fig.text(0.06, 0.805, f"Attack Type: {results['attack_type']}", fontsize=11, color='#334155')
+        fig.text(0.06, 0.78, f"Images Evaluated: {results['num_images']}", fontsize=11, color='#334155')
+
         success_rate = results['success_rate']
         if success_rate >= 70:
             threat_level = "HIGH RISK"
@@ -743,11 +822,41 @@ def generate_report_pdf(results, model_id):
         else:
             threat_level = "LOW RISK"
             threat_color = '#16a34a'
-        
-        plt.text(0.5, 0.20, "Threat Level Assessment", ha='center', fontsize=16, fontweight='bold')
-        plt.text(0.5, 0.12, threat_level, ha='center', fontsize=20, fontweight='bold', 
-                color=threat_color, bbox=dict(boxstyle='round,pad=0.5', facecolor=threat_color, alpha=0.2))
-        
+
+        draw_summary_card(fig, 0.06, 0.60, 0.20, 0.12, "Attack Success Rate", f"{results['success_rate']:.1f}%", '#dc2626')
+        draw_summary_card(fig, 0.285, 0.60, 0.20, 0.12, "Original Confidence", f"{results['original_accuracy']:.2f}%", '#16a34a')
+        draw_summary_card(fig, 0.51, 0.60, 0.20, 0.12, "Adversarial Confidence", f"{results['adversarial_accuracy']:.2f}%", '#f59e0b')
+        draw_summary_card(
+            fig,
+            0.735,
+            0.60,
+            0.20,
+            0.12,
+            "Execution Time",
+            f"{results['execution_time']:.2f}s",
+            '#2563eb',
+            subtitle=f"Accuracy drop: {results['original_accuracy'] - results['adversarial_accuracy']:.2f}%"
+        )
+
+        risk_rect = plt.Rectangle((0.06, 0.40), 0.88, 0.12, transform=fig.transFigure,
+                                  facecolor='#f8fafc', edgecolor='#cbd5e1', linewidth=1.2)
+        fig.patches.append(risk_rect)
+        fig.text(0.08, 0.47, "Threat Level Assessment", fontsize=13, fontweight='bold', color='#0f172a')
+        fig.text(0.08, 0.43, threat_level, fontsize=22, fontweight='bold', color=threat_color)
+
+        summary = (
+            f"The {results['attack_type']} attack altered model predictions on "
+            f"{results['success_rate']:.1f}% of the evaluated images. "
+            f"Average confidence shifted from {results['original_accuracy']:.2f}% to "
+            f"{results['adversarial_accuracy']:.2f}%, indicating the current robustness posture is {threat_level.lower()}."
+        )
+        fig.text(0.33, 0.445, textwrap.fill(summary, 68), fontsize=10.5, color='#334155', va='center')
+
+        details_text = results.get('details', 'No additional details available.')
+        fig.text(0.06, 0.34, "Assessment Narrative", fontsize=13, fontweight='bold', color='#0f172a')
+        fig.text(0.06, 0.30, textwrap.fill(details_text, 118), fontsize=10, color='#334155', va='top')
+
+        add_footer(fig)
         plt.axis('off')
         pdf.savefig(fig, bbox_inches='tight')
         plt.close()
@@ -828,23 +937,83 @@ def generate_report_pdf(results, model_id):
             ax4.set_title('Confidence Comparison', fontsize=12, fontweight='bold', pad=10)
         
         plt.tight_layout()
+        add_footer(fig)
         pdf.savefig(fig, bbox_inches='tight')
         plt.close()
-        
-        # Page 3: Detailed Results and Recommendations
+
+        # Pages 3+: Detailed per-image evidence
+        if image_results:
+            images_per_page = 4
+            for start in range(0, len(image_results), images_per_page):
+                page_results = image_results[start:start + images_per_page]
+                fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
+                axes = axes.flatten()
+                add_page_header(
+                    fig,
+                    'Image Evidence and Predictions',
+                    f"Images {start + 1}-{start + len(page_results)} of {len(image_results)}"
+                )
+
+                for ax, image_result in zip(axes, page_results):
+                    ax.set_facecolor('#f8fafc')
+                    for spine in ax.spines.values():
+                        spine.set_edgecolor('#cbd5e1')
+                        spine.set_linewidth(1.0)
+
+                    image_path = resolve_attack_image_path(image_result.get('image_name'))
+                    if image_path:
+                        try:
+                            with Image.open(image_path) as source_image:
+                                preview = source_image.convert('RGB')
+                                preview.thumbnail((260, 180))
+                                ax.imshow(preview)
+                        except Exception:
+                            ax.text(0.5, 0.68, 'Image preview unavailable', ha='center', va='center',
+                                    fontsize=10, color='#64748b', transform=ax.transAxes)
+                    else:
+                        ax.text(0.5, 0.68, 'Image preview unavailable', ha='center', va='center',
+                                fontsize=10, color='#64748b', transform=ax.transAxes)
+
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+
+                    success_text = 'Attack Successful' if image_result.get('success') else 'Attack Blocked'
+                    success_color = '#dc2626' if image_result.get('success') else '#16a34a'
+                    original_label = image_result.get('original_label') or f"Class {image_result.get('original_pred', 'N/A')}"
+                    adversarial_label = image_result.get('adversarial_label') or f"Class {image_result.get('adversarial_pred', 'N/A')}"
+                    details_lines = [
+                        f"Original image: {image_result.get('image_name', 'Unknown')}",
+                        f"Adversarial image: {image_result.get('image_name', 'Unknown')} (attacked)",
+                        f"Outcome: {success_text}",
+                        f"Model predicted as: {original_label}",
+                        f"Original confidence: {image_result.get('original_confidence', 0):.2f}%",
+                        f"After attack predicted as: {adversarial_label}",
+                        f"Adversarial confidence: {image_result.get('adversarial_confidence', 0):.2f}%"
+                    ]
+
+                    ax.add_patch(plt.Rectangle((0, 0), 1, 0.28, transform=ax.transAxes,
+                                               facecolor='white', edgecolor='#e2e8f0', linewidth=0.8))
+                    ax.text(0.03, 0.24, success_text, transform=ax.transAxes, fontsize=10.5,
+                            fontweight='bold', color=success_color, va='top')
+                    ax.text(0.03, 0.19, "\n".join(textwrap.fill(line, 38) for line in details_lines),
+                            transform=ax.transAxes, fontsize=8.8, color='#334155', va='top')
+
+                for ax in axes[len(page_results):]:
+                    ax.axis('off')
+
+                plt.tight_layout(rect=[0, 0.05, 1, 0.90])
+                add_footer(fig)
+                pdf.savefig(fig, bbox_inches='tight')
+                plt.close()
+
+        # Final page: Detailed Results and Recommendations
         fig = plt.figure(figsize=(11, 8.5))
-        fig.suptitle('Detailed Analysis & Recommendations', fontsize=20, fontweight='bold', y=0.98)
-        
-        # Detailed Description
-        plt.text(0.5, 0.90, 'Assessment Summary', ha='center', fontsize=16, fontweight='bold')
-        
-        # Wrap text for details
-        details_text = results.get('details', 'No additional details available.')
-        wrapped_details = '\n'.join([details_text[i:i+90] for i in range(0, len(details_text), 90)])
-        plt.text(0.1, 0.75, wrapped_details, fontsize=10, verticalalignment='top', wrap=True)
-        
-        # Recommendations Section
-        plt.text(0.5, 0.55, 'Security Recommendations', ha='center', fontsize=16, fontweight='bold')
+        add_page_header(fig, 'Recommendations', 'Security actions based on observed threat exposure')
+
+        plt.text(0.06, 0.84, 'Assessment Summary', fontsize=15, fontweight='bold', color='#0f172a')
+        plt.text(0.06, 0.79, textwrap.fill(details_text, 118), fontsize=10, color='#334155', va='top')
+
+        plt.text(0.06, 0.61, 'Security Recommendations', fontsize=15, fontweight='bold', color='#0f172a')
         
         recommendations = [
             "1. Implement Adversarial Training",
@@ -868,20 +1037,17 @@ def generate_report_pdf(results, model_id):
             "   • Stay updated with latest attack techniques"
         ]
         
-        y_pos = 0.48
+        y_pos = 0.55
         for rec in recommendations:
             if rec.startswith('   '):
-                plt.text(0.15, y_pos, rec, fontsize=9, family='monospace')
+                plt.text(0.10, y_pos, rec.replace('â€¢', '•'), fontsize=9.2, color='#334155')
             elif rec:
-                plt.text(0.1, y_pos, rec, fontsize=10, fontweight='bold')
+                plt.text(0.06, y_pos, rec, fontsize=10.5, fontweight='bold', color='#0f172a')
             else:
                 y_pos -= 0.01
             y_pos -= 0.03
-        
-        # Footer
-        plt.text(0.5, 0.03, 'Generated by ThreatSentry | Securing the Future of AI', 
-                ha='center', fontsize=9, style='italic', color='gray')
-        
+
+        add_footer(fig)
         plt.axis('off')
         pdf.savefig(fig, bbox_inches='tight')
         plt.close()
@@ -897,6 +1063,7 @@ def generate_report_pdf(results, model_id):
     return filepath
 
 @app.route('/api/generate-report', methods=['POST'])
+@require_clerk_auth
 def generate_report():
     """Generate and download a PDF report for threat assessment results"""
     try:
@@ -936,6 +1103,7 @@ def generate_report():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/validate-model', methods=['POST'])
+@require_clerk_auth
 def validate_model():
     """Validate if a model is compatible with image classification attacks"""
     try:
@@ -992,6 +1160,7 @@ def validate_model():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/models/upload', methods=['POST'])
+@require_clerk_auth
 def upload_model():
     """Upload a custom model file (.pt or .h5)"""
     try:
@@ -1087,6 +1256,7 @@ def upload_model():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/models/list', methods=['GET'])
+@require_clerk_auth
 def list_models():
     """Get list of all uploaded custom models"""
     try:
@@ -1113,6 +1283,7 @@ def list_models():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/models/delete/<model_id>', methods=['DELETE'])
+@require_clerk_auth
 def delete_model(model_id):
     """Delete a custom model"""
     try:
@@ -1141,6 +1312,7 @@ def delete_model(model_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/models/info/<model_id>', methods=['GET'])
+@require_clerk_auth
 def get_model_info(model_id):
     """Get information about a specific custom model"""
     try:

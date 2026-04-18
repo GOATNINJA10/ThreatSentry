@@ -11,6 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { useAuth } from "@clerk/clerk-react";
 
 interface AttackResult {
   attack_type: string;
@@ -43,8 +44,11 @@ interface CustomModel {
   file_size: number;
 }
 
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
+
 const ThreatAssessment = () => {
   const navigate = useNavigate();
+  const { getToken } = useAuth();
   const [modelId, setModelId] = useState("");
   const [modelSource, setModelSource] = useState<"huggingface" | "custom">("huggingface");
   const [selectedAttack, setSelectedAttack] = useState("fgsm");
@@ -64,6 +68,22 @@ const ThreatAssessment = () => {
   const [uploadInputSize, setUploadInputSize] = useState("224");
   const [isUploading, setIsUploading] = useState(false);
 
+  const fetchWithAuth = async (url: string, init: RequestInit = {}, includeJson = false) => {
+    const token = await getToken();
+    const headers = new Headers(init.headers);
+    if (includeJson) {
+      headers.set("Content-Type", "application/json");
+    }
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+
+    return fetch(url, {
+      ...init,
+      headers
+    });
+  };
+
   // Load custom models on mount
   useEffect(() => {
     if (modelSource === "custom") {
@@ -74,7 +94,7 @@ const ThreatAssessment = () => {
   const loadCustomModels = async () => {
     setIsLoadingModels(true);
     try {
-      const response = await fetch("http://localhost:5000/api/models/list");
+      const response = await fetchWithAuth(`${API_BASE_URL}/api/models/list`);
       const data = await response.json();
       
       if (data.success) {
@@ -131,9 +151,9 @@ const ThreatAssessment = () => {
     formData.append('input_size', uploadInputSize);
 
     try {
-      const response = await fetch("http://localhost:5000/api/models/upload", {
+      const response = await fetchWithAuth(`${API_BASE_URL}/api/models/upload`, {
         method: "POST",
-        body: formData,
+        body: formData
       });
 
       const data = await response.json();
@@ -174,8 +194,8 @@ const ThreatAssessment = () => {
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/api/models/delete/${modelId}`, {
-        method: "DELETE",
+      const response = await fetchWithAuth(`${API_BASE_URL}/api/models/delete/${modelId}`, {
+        method: "DELETE"
       });
 
       const data = await response.json();
@@ -230,16 +250,13 @@ const ThreatAssessment = () => {
     setIsDownloading(true);
 
     try {
-      const response = await fetch("http://localhost:5000/api/generate-report", {
+      const response = await fetchWithAuth(`${API_BASE_URL}/api/generate-report`, {
         method: "POST",
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           results: results,
           model_id: modelId,
-        }),
-      });
+        })
+      }, true);
 
       if (!response.ok) {
         throw new Error("Failed to generate report");
@@ -285,17 +302,14 @@ const ThreatAssessment = () => {
         setProgress((prev) => Math.min(prev + 10, 90));
       }, 500);
 
-      const response = await fetch("http://localhost:5000/api/threat-assessment", {
+      const response = await fetchWithAuth(`${API_BASE_URL}/api/threat-assessment`, {
         method: "POST",
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({
           model_id: modelId,
           attack_type: selectedAttack,
           model_source: modelSource,
-        }),
-      });
+        })
+      }, true);
 
       clearInterval(progressInterval);
       setProgress(100);
