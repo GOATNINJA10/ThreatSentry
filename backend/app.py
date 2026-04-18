@@ -4,23 +4,13 @@ from functools import wraps
 from dotenv import load_dotenv
 import jwt
 from jwt import PyJWKClient
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from transformers import AutoImageProcessor, AutoModelForImageClassification
 from PIL import Image
 import io
 import time
 import numpy as np
-from torchvision import transforms
 import os
 import random
 import warnings
-import matplotlib
-matplotlib.use('Agg')  # Use non-GUI backend
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib.backends.backend_pdf import PdfPages
 from datetime import datetime
 from werkzeug.utils import secure_filename
 import json
@@ -35,14 +25,54 @@ app = Flask(__name__)
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
 
+torch = None
+nn = None
+F = None
+AutoImageProcessor = None
+AutoModelForImageClassification = None
+transforms = None
+plt = None
+sns = None
+PdfPages = None
+device = None
+
+
+def ensure_ml_dependencies():
+    """Import heavy ML and plotting dependencies only when they are needed."""
+    global torch, nn, F, AutoImageProcessor, AutoModelForImageClassification
+    global transforms, plt, sns, PdfPages, device
+
+    if torch is not None:
+        return
+
+    import matplotlib
+    matplotlib.use('Agg')
+
+    import torch as _torch
+    import torch.nn as _nn
+    import torch.nn.functional as _F
+    from transformers import AutoImageProcessor as _AutoImageProcessor, AutoModelForImageClassification as _AutoModelForImageClassification
+    from torchvision import transforms as _transforms
+    import matplotlib.pyplot as _plt
+    import seaborn as _sns
+    from matplotlib.backends.backend_pdf import PdfPages as _PdfPages
+
+    torch = _torch
+    nn = _nn
+    F = _F
+    AutoImageProcessor = _AutoImageProcessor
+    AutoModelForImageClassification = _AutoModelForImageClassification
+    transforms = _transforms
+    plt = _plt
+    sns = _sns
+    PdfPages = _PdfPages
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # Clerk JWT verification settings
 CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
 CLERK_ISSUER = os.getenv("CLERK_ISSUER")
 CLERK_AUDIENCE = os.getenv("CLERK_AUDIENCE")
 CLERK_JWKS_CLIENT = PyJWKClient(CLERK_JWKS_URL) if CLERK_JWKS_URL else None
-
-# Device configuration
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Directories
 ATTACK_IMAGES_FOLDER = os.path.join(os.path.dirname(__file__), 'attack')
@@ -118,6 +148,7 @@ def save_models_metadata(metadata):
 
 def load_custom_pytorch_model(model_path, num_classes=1000, input_size=224):
     """Load a custom PyTorch model (.pt or .pth file)"""
+    ensure_ml_dependencies()
     try:
         # Try to load the model directly
         loaded = torch.load(model_path, map_location=device, weights_only=False)
@@ -264,6 +295,7 @@ def load_custom_pytorch_model(model_path, num_classes=1000, input_size=224):
 
 def load_custom_keras_model(model_path):
     """Load a custom Keras/TensorFlow model (.h5 file)"""
+    ensure_ml_dependencies()
     try:
         import tensorflow as tf
         from tensorflow import keras
@@ -305,6 +337,7 @@ def load_custom_keras_model(model_path):
 
 def create_default_processor(input_size=224):
     """Create a default image processor for custom models"""
+    ensure_ml_dependencies()
     class DefaultProcessor:
         def __init__(self, size=224):
             self.size = size
@@ -371,6 +404,7 @@ def resolve_attack_image_path(image_name):
 
 class AdversarialAttacks:
     def __init__(self, model, processor):
+        ensure_ml_dependencies()
         self.model = model.to(device)
         self.processor = processor
         self.model.eval()
@@ -552,6 +586,7 @@ class AdversarialAttacks:
 @require_clerk_auth
 def threat_assessment():
     try:
+        ensure_ml_dependencies()
         # Get parameters
         data = request.get_json()
         model_id = data.get('model_id')
@@ -759,6 +794,7 @@ def threat_assessment():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
+    ensure_ml_dependencies()
     return jsonify({
         'status': 'healthy',
         'device': str(device),
@@ -767,6 +803,7 @@ def health_check():
 
 def generate_report_pdf(results, model_id):
     """Generate a comprehensive PDF report with charts and graphs"""
+    ensure_ml_dependencies()
     
     # Set style
     sns.set_style("whitegrid")
@@ -1340,7 +1377,8 @@ def get_model_info(model_id):
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    ensure_ml_dependencies()
     print(f"Starting ThreatSentry Backend")
     print(f"Device: {device}")
     print(f"CUDA Available: {torch.cuda.is_available()}")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
