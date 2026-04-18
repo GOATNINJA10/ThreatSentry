@@ -22,8 +22,23 @@ warnings.filterwarnings('ignore', message='Could not find image processor class'
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 app = Flask(__name__)
-CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
+
+
+def get_allowed_origins():
+    """Resolve allowed CORS origins from environment variables."""
+    raw_origins = os.getenv("CORS_ALLOWED_ORIGINS") or os.getenv("FRONTEND_URL") or ""
+    origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    return origins or "*"
+
+
+CORS(
+    app,
+    resources={r"/api/*": {"origins": get_allowed_origins()}},
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    expose_headers=["Content-Disposition"],
+)
 
 torch = None
 nn = None
@@ -114,6 +129,10 @@ def verify_clerk_jwt(token):
 def require_clerk_auth(handler):
     @wraps(handler)
     def wrapper(*args, **kwargs):
+        # Browsers call preflight OPTIONS without auth headers.
+        if request.method == "OPTIONS":
+            return app.make_default_options_response()
+
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Unauthorized", "message": "Missing Bearer token"}), 401
