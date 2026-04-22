@@ -17,7 +17,7 @@ interface DashboardStat {
 }
 
 interface DashboardAlert {
-  id: number;
+  id: number | string;
   type: string;
   model: string;
   severity: Severity;
@@ -45,6 +45,16 @@ interface BackendModel {
   input_size?: number;
   upload_date?: string;
   file_size?: number;
+}
+
+interface BackendHistoryRecord {
+  id: string;
+  timestamp?: string;
+  model_id?: string;
+  attack_type?: string;
+  success_rate?: number;
+  severity?: string;
+  type?: string;
 }
 
 type DashboardMetadataOverride = Partial<DashboardData>;
@@ -215,6 +225,27 @@ const buildStats = (models: BackendModel[], seed: string): DashboardStat[] => {
   ];
 };
 
+const mapHistoryRecordsToAlerts = (historyRecords: BackendHistoryRecord[]): DashboardAlert[] => {
+  return historyRecords.slice(0, 3).map((record, index) => {
+    const successRate = Number(record.success_rate ?? 0);
+    const severity: Severity = record.severity === "high" || record.severity === "medium" || record.severity === "low"
+      ? record.severity
+      : successRate >= 70
+        ? "high"
+        : successRate >= 40
+          ? "medium"
+          : "low";
+
+    return {
+      id: record.id || `history-${index}`,
+      type: record.type || `${String(record.attack_type || "Attack").toUpperCase()} Assessment`,
+      model: record.model_id || "Unknown model",
+      severity,
+      time: formatTimeAgo(record.timestamp)
+    };
+  });
+};
+
 const applyMetadataOverrides = (data: DashboardData, metadataOverride?: unknown): DashboardData => {
   if (!metadataOverride || typeof metadataOverride !== "object") {
     return data;
@@ -317,17 +348,33 @@ const Dashboard = () => {
       setIsLoadingDashboard(true);
       try {
         const token = await getToken();
-        const response = await fetch(`${API_BASE_URL}/api/models/list`, {
+        const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+
+        const modelsResponse = await fetch(`${API_BASE_URL}/api/models/list`, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined
         });
 
-        if (!response.ok) {
+        const historyResponse = await fetch(`${API_BASE_URL}/api/history-records/recent?limit=3`, {
+          headers
+        });
+
+        if (!modelsResponse.ok) {
           throw new Error("Failed to load dashboard data");
         }
 
-        const data = await response.json();
+        const data = await modelsResponse.json();
+        const historyData = historyResponse.ok ? await historyResponse.json() : null;
+
         if (isActive && data.success && Array.isArray(data.models)) {
-          setDashboardData(deriveDashboardData(seed, metadataDashboard, data.models));
+          const derived = deriveDashboardData(seed, metadataDashboard, data.models);
+          const historyAlerts = historyData?.success && Array.isArray(historyData.history_records)
+            ? mapHistoryRecordsToAlerts(historyData.history_records)
+            : [];
+
+          setDashboardData({
+            ...derived,
+            alerts: historyAlerts.length > 0 ? historyAlerts : derived.alerts
+          });
         }
       } catch (error) {
         if (isActive) {

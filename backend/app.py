@@ -93,6 +93,7 @@ CLERK_JWKS_CLIENT = PyJWKClient(CLERK_JWKS_URL) if CLERK_JWKS_URL else None
 ATTACK_IMAGES_FOLDER = os.path.join(os.path.dirname(__file__), 'attack')
 MODELS_FOLDER = os.path.join(os.path.dirname(__file__), 'models')
 MODELS_METADATA_FILE = os.path.join(MODELS_FOLDER, 'models_metadata.json')
+HISTORY_RECORDS_FILE = os.path.join(MODELS_FOLDER, 'history_records.json')
 
 # Ensure directories exist
 os.makedirs(MODELS_FOLDER, exist_ok=True)
@@ -164,6 +165,51 @@ def save_models_metadata(metadata):
     """Save models metadata to JSON file"""
     with open(MODELS_METADATA_FILE, 'w') as f:
         json.dump(metadata, f, indent=2)
+
+def load_history_records():
+    """Load threat assessment history records from JSON file."""
+    if os.path.exists(HISTORY_RECORDS_FILE):
+        try:
+            with open(HISTORY_RECORDS_FILE, 'r') as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+    return []
+
+def save_history_records(records):
+    """Save threat assessment history records to JSON file."""
+    with open(HISTORY_RECORDS_FILE, 'w') as f:
+        json.dump(records, f, indent=2)
+
+def persist_history_record(clerk_claims, model_id, attack_type, response_data):
+    """Persist one history record per completed threat assessment."""
+    user_id = (clerk_claims or {}).get('sub')
+    if not user_id:
+        return
+
+    records = load_history_records()
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+    success_rate = float(response_data.get('success_rate', 0))
+    severity = 'high' if success_rate >= 70 else 'medium' if success_rate >= 40 else 'low'
+
+    records.append({
+        'id': f"{int(time.time() * 1000)}-{random.randint(1000, 9999)}",
+        'user_id': user_id,
+        'timestamp': timestamp,
+        'model_id': model_id,
+        'attack_type': str(attack_type).upper(),
+        'success_rate': success_rate,
+        'original_accuracy': float(response_data.get('original_accuracy', 0)),
+        'adversarial_accuracy': float(response_data.get('adversarial_accuracy', 0)),
+        'num_images': int(response_data.get('num_images', 0)),
+        'severity': severity,
+        'type': 'Threat Assessment Completed'
+    })
+
+    # Keep most recent records only to avoid unbounded growth.
+    records = records[-500:]
+    save_history_records(records)
 
 def load_custom_pytorch_model(model_path, num_classes=1000, input_size=224):
     """Load a custom PyTorch model (.pt or .pth file)"""
@@ -802,6 +848,13 @@ def threat_assessment():
                       f"Average adversarial accuracy: {avg_adv_acc:.2f}%. "
                       f"The attack successfully fooled the model in {total_success} out of {num_images} cases."
         }
+
+        persist_history_record(
+            getattr(request, 'clerk_claims', None),
+            model_id,
+            attack_name,
+            response
+        )
         
         return jsonify(response)
     
@@ -1336,6 +1389,29 @@ def list_models():
     
     except Exception as e:
         print(f"❌ Error listing models: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/history-records/recent', methods=['GET'])
+@require_clerk_auth
+def list_recent_history_records():
+    """Get recent threat assessment history records for the authenticated user."""
+    try:
+        clerk_claims = getattr(request, 'clerk_claims', {}) or {}
+        user_id = clerk_claims.get('sub')
+        limit = request.args.get('limit', default=3, type=int)
+        limit = max(1, min(limit or 3, 20))
+
+        records = load_history_records()
+        user_records = [record for record in records if record.get('user_id') == user_id]
+        user_records.sort(key=lambda record: record.get('timestamp', ''), reverse=True)
+
+        return jsonify({
+            'success': True,
+            'history_records': user_records[:limit],
+            'count': len(user_records[:limit])
+        })
+    except Exception as e:
+        print(f"❌ Error listing history records: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/models/delete/<model_id>', methods=['DELETE'])
