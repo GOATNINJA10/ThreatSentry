@@ -69,19 +69,34 @@ const ThreatAssessment = () => {
   const [isUploading, setIsUploading] = useState(false);
 
   const fetchWithAuth = async (url: string, init: RequestInit = {}, includeJson = false) => {
+    const buildHeaders = (token: string | null) => {
+      const headers = new Headers(init.headers);
+      if (includeJson) {
+        headers.set("Content-Type", "application/json");
+      }
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+      return headers;
+    };
+
     const token = await getToken();
-    const headers = new Headers(init.headers);
-    if (includeJson) {
-      headers.set("Content-Type", "application/json");
-    }
-    if (token) {
-      headers.set("Authorization", `Bearer ${token}`);
+    let response = await fetch(url, {
+      ...init,
+      headers: buildHeaders(token)
+    });
+
+    if (response.status === 401) {
+      const freshToken = await getToken({ skipCache: true });
+      if (freshToken && freshToken !== token) {
+        response = await fetch(url, {
+          ...init,
+          headers: buildHeaders(freshToken)
+        });
+      }
     }
 
-    return fetch(url, {
-      ...init,
-      headers
-    });
+    return response;
   };
 
   // Load custom models on mount

@@ -4,6 +4,7 @@ from functools import wraps
 from dotenv import load_dotenv
 import jwt
 from jwt import PyJWKClient
+from jwt.exceptions import ExpiredSignatureError
 from PIL import Image
 import io
 import time
@@ -87,6 +88,7 @@ def ensure_ml_dependencies():
 CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL")
 CLERK_ISSUER = os.getenv("CLERK_ISSUER")
 CLERK_AUDIENCE = os.getenv("CLERK_AUDIENCE")
+CLERK_JWT_LEEWAY_SECONDS = int(os.getenv("CLERK_JWT_LEEWAY_SECONDS", "120"))
 CLERK_JWKS_CLIENT = PyJWKClient(CLERK_JWKS_URL) if CLERK_JWKS_URL else None
 
 # Directories
@@ -124,7 +126,8 @@ def verify_clerk_jwt(token):
         algorithms=["RS256"],
         audience=CLERK_AUDIENCE,
         issuer=CLERK_ISSUER,
-        options=options
+        options=options,
+        leeway=CLERK_JWT_LEEWAY_SECONDS
     )
 
 def require_clerk_auth(handler):
@@ -144,6 +147,8 @@ def require_clerk_auth(handler):
 
         try:
             request.clerk_claims = verify_clerk_jwt(token)
+        except ExpiredSignatureError:
+            return jsonify({"error": "Unauthorized", "message": "Session token expired. Please refresh and try again."}), 401
         except Exception as exc:
             return jsonify({"error": "Unauthorized", "message": str(exc)}), 401
 
