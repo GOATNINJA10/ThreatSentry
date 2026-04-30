@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Home, Target, Shield, AlertTriangle, Loader2, CheckCircle2, XCircle, Info, Download, Upload, Trash2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Home, Target, Shield, AlertTriangle, Loader2, CheckCircle2, XCircle, Info, Download, Upload, Trash2, RefreshCw, History, FileJson, FileSpreadsheet, Clock, Eye, Zap, Cpu, Waves, Brain, Play, CheckSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@clerk/clerk-react";
+import { Badge } from "@/components/ui/badge";
 
 interface AttackResult {
   attack_type: string;
@@ -44,6 +45,19 @@ interface CustomModel {
   file_size: number;
 }
 
+interface HistoryRecord {
+  id: string;
+  timestamp: string;
+  model_id: string;
+  attack_type: string;
+  success_rate: number;
+  original_accuracy: number;
+  adversarial_accuracy: number;
+  num_images: number;
+  severity: string;
+  type: string;
+}
+
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
 const ThreatAssessment = () => {
@@ -56,6 +70,23 @@ const ThreatAssessment = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<AttackResult | null>(null);
+
+  // Custom attack parameters
+  const [customParams, setCustomParams] = useState({
+    epsilon: 0.03,
+    alpha: 0.01,
+    iterations: 10
+  });
+  const [useCustomParams, setUseCustomParams] = useState(false);
+
+  // History
+  const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Custom test images
+  const [testImages, setTestImages] = useState<File[]>([]);
+  const [useCustomImages, setUseCustomImages] = useState(false);
   
   // Custom model states
   const [customModels, setCustomModels] = useState<CustomModel[]>([]);
@@ -67,6 +98,63 @@ const ThreatAssessment = () => {
   const [uploadNumClasses, setUploadNumClasses] = useState("1000");
   const [uploadInputSize, setUploadInputSize] = useState("224");
   const [isUploading, setIsUploading] = useState(false);
+
+  // Adversarial training state
+  const [showTrainingDialog, setShowTrainingDialog] = useState(false);
+  const [trainingModelId, setTrainingModelId] = useState("");
+  const [trainingAttack, setTrainingAttack] = useState("fgsm");
+  const [trainingEpochs, setTrainingEpochs] = useState(3);
+  const [trainingEpsilon, setTrainingEpsilon] = useState(0.03);
+  const [isTraining, setIsTraining] = useState(false);
+  const [trainingResult, setTrainingResult] = useState<{success: boolean; message: string; trained_model_id?: string} | null>(null);
+
+  const runAdversarialTraining = async () => {
+    if (!trainingModelId) {
+      toast.error("Please select a model to train");
+      return;
+    }
+
+    setIsTraining(true);
+    setTrainingResult(null);
+
+    try {
+      const response = await fetchWithAuth(`${API_BASE_URL}/api/adversarial-training`, {
+        method: "POST",
+        body: JSON.stringify({
+          model_id: trainingModelId,
+          attack_type: trainingAttack,
+          epochs: trainingEpochs,
+          epsilon: trainingEpsilon
+        })
+      }, true);
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setTrainingResult({
+          success: true,
+          message: `Training complete! Loss: ${data.training_loss?.toFixed(4)}`,
+          trained_model_id: data.trained_model_id
+        });
+        toast.success("Adversarial training completed!");
+        loadCustomModels();
+      } else {
+        setTrainingResult({
+          success: false,
+          message: data.error || "Training failed"
+        });
+        toast.error("Training failed");
+      }
+    } catch (error) {
+      setTrainingResult({
+        success: false,
+        message: "Training failed. Make sure backend is running."
+      });
+      toast.error("Training failed");
+    } finally {
+      setIsTraining(false);
+    }
+  };
 
   const fetchWithAuth = async (url: string, init: RequestInit = {}, includeJson = false) => {
     const buildHeaders = (token: string | null) => {
@@ -122,6 +210,42 @@ const ThreatAssessment = () => {
       toast.error("Failed to load custom models. Make sure the backend is running.");
     } finally {
       setIsLoadingModels(false);
+    }
+  };
+
+  const loadHistoryRecords = async () => {
+    setIsLoadingHistory(true);
+    try {
+      const response = await fetchWithAuth(`${API_BASE_URL}/api/history-records/recent?limit=20`);
+      const data = await response.json();
+      
+      if (data.success) {
+        setHistoryRecords(data.history_records || []);
+      }
+    } catch (error) {
+      console.error("Error loading history:", error);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showHistory) {
+      loadHistoryRecords();
+    }
+  }, [showHistory]);
+
+  const formatDate = (isoString: string) => {
+    const date = new Date(isoString);
+    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'high': return 'bg-threat/20 text-threat border-threat/30';
+      case 'medium': return 'bg-accent/20 text-accent border-accent/30';
+      case 'low': return 'bg-success/20 text-success border-success/30';
+      default: return 'bg-secondary text-muted-foreground';
     }
   };
 
@@ -235,24 +359,45 @@ const ThreatAssessment = () => {
   const attackTypes = [
     {
       id: "fgsm",
-      name: "FGSM Attack",
-      description: "Fast Gradient Sign Method - Fast and effective adversarial attack",
+      name: "FGSM",
+      description: "Fast Gradient Sign Method - Quick single-step attack",
       icon: Target,
       color: "text-threat"
     },
     {
       id: "pgd",
-      name: "PGD Attack",
-      description: "Projected Gradient Descent - Iterative and powerful attack method",
+      name: "PGD",
+      description: "Projected Gradient Descent - Powerful iterative attack",
       icon: Shield,
       color: "text-accent"
     },
     {
       id: "deepfool",
-      name: "DeepFool Attack",
-      description: "Minimal perturbation attack for finding decision boundaries",
+      name: "DeepFool",
+      description: "Minimal perturbation - Finds decision boundaries",
       icon: AlertTriangle,
       color: "text-primary"
+    },
+    {
+      id: "bim",
+      name: "BIM",
+      description: "Basic Iterative Method - Iterative FGSM variant",
+      icon: Zap,
+      color: "text-purple-500"
+    },
+    {
+      id: "cw",
+      name: "C&W",
+      description: "Carlini-Wagner - Powerful optimization-based attack",
+      icon: Cpu,
+      color: "text-blue-500"
+    },
+    {
+      id: "hopskipjump",
+      name: "HopSkipJump",
+      description: "Black-box attack - Query-efficient boundary attack",
+      icon: Waves,
+      color: "text-orange-500"
     }
   ];
 
@@ -301,6 +446,65 @@ const ThreatAssessment = () => {
     }
   };
 
+  const exportAsJSON = () => {
+    if (!results) {
+      toast.error("No results available to export");
+      return;
+    }
+    const jsonStr = JSON.stringify(results, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `threat_assessment_${results.attack_type}_${new Date().getTime()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    toast.success("JSON exported successfully!");
+  };
+
+  const exportAsCSV = () => {
+    if (!results) {
+      toast.error("No results available to export");
+      return;
+    }
+    const headers = ['Metric', 'Value'];
+    const rows = [
+      ['Attack Type', results.attack_type],
+      ['Success Rate (%)', results.success_rate.toFixed(2)],
+      ['Original Accuracy (%)', results.original_accuracy.toFixed(2)],
+      ['Adversarial Accuracy (%)', results.adversarial_accuracy.toFixed(2)],
+      ['Accuracy Drop (%)', (results.original_accuracy - results.adversarial_accuracy).toFixed(2)],
+      ['Execution Time (s)', results.execution_time.toFixed(2)],
+      ['Images Processed', results.num_images],
+      ['Model ID', modelId]
+    ];
+    
+    if (results.image_results && results.image_results.length > 0) {
+      rows.push(['', '']);
+      rows.push(['Image Results', '']);
+      results.image_results.forEach((img, idx) => {
+        rows.push([
+          `Image ${idx + 1}`,
+          `${img.image_name} - Original: ${img.original_label} (${img.original_confidence.toFixed(1)}%), Adversarial: ${img.adversarial_label} (${img.adversarial_confidence.toFixed(1)}%), Success: ${img.success}`
+        ]);
+      });
+    }
+    
+    const csvContent = [headers, ...rows].map(row => row.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `threat_assessment_${results.attack_type}_${new Date().getTime()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    toast.success("CSV exported successfully!");
+  };
+
   const runThreatAssessment = async () => {
     if (!modelId.trim()) {
       toast.error(modelSource === "huggingface" ? "Please enter a Hugging Face model ID" : "Please select a custom model");
@@ -312,6 +516,28 @@ const ThreatAssessment = () => {
     setResults(null);
 
     try {
+      // Upload custom test images if provided
+      if (useCustomImages && testImages.length > 0) {
+        const formData = new FormData();
+        testImages.forEach((file) => {
+          formData.append('files', file);
+        });
+        
+        const token = await getToken();
+        const uploadResponse = await fetch(`${API_BASE_URL}/api/test-images/upload`, {
+          method: 'POST',
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          body: formData
+        });
+        
+        if (!uploadResponse.ok) {
+          throw new Error('Failed to upload test images');
+        }
+        
+        const uploadData = await uploadResponse.json();
+        toast.success(`Uploaded ${uploadData.files?.length || 0} test images`);
+      }
+
       // Simulate progress
       const progressInterval = setInterval(() => {
         setProgress((prev) => Math.min(prev + 10, 90));
@@ -323,6 +549,12 @@ const ThreatAssessment = () => {
           model_id: modelId,
           attack_type: selectedAttack,
           model_source: modelSource,
+          use_custom_images: useCustomImages && testImages.length > 0,
+          ...(useCustomParams && {
+            epsilon: customParams.epsilon,
+            alpha: customParams.alpha,
+            iterations: customParams.iterations
+          })
         })
       }, true);
 
@@ -381,6 +613,82 @@ const ThreatAssessment = () => {
     return { level: "Low", color: "text-success bg-success/10 border-success/30" };
   };
 
+  const getDefenseRecommendations = (attackType: string, successRate: number) => {
+    const recommendations: { title: string; description: string; priority: string }[] = [];
+    const attack = attackType.toUpperCase();
+
+    // High severity recommendations
+    if (successRate >= 70) {
+      recommendations.push({
+        title: "Immediate: Adversarial Training",
+        description: `Train your model with adversarial examples generated by ${attack} to improve robustness. Use datasets like Adversarial Robustness Toolbox (ART).`,
+        priority: "high"
+      });
+      recommendations.push({
+        title: "High Priority: Input Preprocessing",
+        description: "Apply input transformations like JPEG compression, bit-depth reduction, or spatial smoothing to neutralize adversarial perturbations.",
+        priority: "high"
+      });
+    }
+
+    // Attack-specific recommendations
+    if (attack === 'FGSM') {
+      recommendations.push({
+        title: "FGSM-Specific Defense: Gradient Masking",
+        description: "Use defensive distillation - train a model with temperature-scaled softmax to smooth loss landscape and reduce gradient sensitivity.",
+        priority: "medium"
+      });
+      recommendations.push({
+        title: "Feature Squeezing",
+        description: "Reduce color depth and apply spatial smoothing to detect adversarial inputs by comparing predictions at different squeezing levels.",
+        priority: "medium"
+      });
+    } else if (attack === 'PGD') {
+      recommendations.push({
+        title: "PGD-Specific Defense: Randomized Resizing",
+        description: "Apply random resizing and padding during inference to break the iterative attack pattern. PGD is sensitive to input transformations.",
+        priority: "medium"
+      });
+      recommendations.push({
+        title: "Label Smoothing",
+        description: "Use label smoothing (0.9 confidence) to make model less susceptible to targeted PGD attacks that exploit hard labels.",
+        priority: "medium"
+      });
+    } else if (attack === 'DEEPFOOL') {
+      recommendations.push({
+        title: "DeepFool-Specific Defense: Certified Robustness",
+        description: "Use certified defense methods like interval bound propagation (IBP) or CROWN to get guaranteed robustness bounds.",
+        priority: "medium"
+      });
+      recommendations.push({
+        title: "Input Gradient Regularization",
+        description: "Add gradient regularization loss during training to make decision boundaries less sensitive to small perturbations.",
+        priority: "medium"
+      });
+    }
+
+    // Universal recommendations (always add)
+    recommendations.push({
+      title: "Ensemble Defense",
+      description: "Combine multiple models with different architectures. Attack success on one model often fails on others.",
+      priority: successRate >= 40 ? "high" : "medium"
+    });
+
+    recommendations.push({
+      title: "Detection Layer",
+      description: "Add a binary classifier head to detect adversarial inputs. Train on both clean and adversarial examples.",
+      priority: "medium"
+    });
+
+    recommendations.push({
+      title: "Continuous Monitoring",
+      description: "Monitor input distribution and model predictions in production. Alert on sudden accuracy drops or unusual prediction patterns.",
+      priority: "low"
+    });
+
+    return recommendations;
+  };
+
   return (
     <div className="min-h-screen bg-secondary/5 pt-5 pb-12">
       <div className="max-w-7xl mx-auto px-6">
@@ -414,7 +722,74 @@ const ThreatAssessment = () => {
           <p className="text-muted-foreground">
             Test your ML models against adversarial attacks (FGSM, PGD, DeepFool)
           </p>
+          <div className="mt-4">
+            <Button
+              variant="outline"
+              onClick={() => setShowHistory(!showHistory)}
+              className="gap-2"
+            >
+              <History className="w-4 h-4" />
+              {showHistory ? 'Hide History' : 'View History'}
+            </Button>
+          </div>
         </div>
+
+        {/* History Panel */}
+        {showHistory && (
+          <div className="mb-8">
+            <Card className="p-6">
+              <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+                <Clock className="w-5 h-5 text-primary" />
+                Assessment History
+              </h2>
+              {isLoadingHistory ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : historyRecords.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p>No assessment history yet</p>
+                  <p className="text-sm">Run your first threat assessment to see results here</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-96 overflow-y-auto">
+                  {historyRecords.map((record) => (
+                    <div
+                      key={record.id}
+                      className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg hover:bg-secondary/50 transition-colors cursor-pointer"
+                      onClick={() => {
+                        setModelId(record.model_id);
+                        setSelectedAttack(record.attack_type.toLowerCase());
+                        setShowHistory(false);
+                      }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-medium truncate">{record.model_id}</span>
+                          <Badge variant="outline" className="text-xs">{record.attack_type}</Badge>
+                        </div>
+                        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {formatDate(record.timestamp)}
+                          </span>
+                          <span>{record.num_images} images</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg font-bold">{record.success_rate.toFixed(1)}%</div>
+                        <Badge className={`text-xs ${getSeverityColor(record.severity)}`}>
+                          {record.severity}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Configuration Panel */}
@@ -431,6 +806,42 @@ const ThreatAssessment = () => {
                     <p>Use vision models like ViT, ResNet, or ConvNeXt. Text models (BERT, GPT) won't work.</p>
                   </div>
                 </div>
+              </div>
+
+              {/* Test Images Upload */}
+              <div className="mb-4 p-3 bg-secondary/30 rounded-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    type="checkbox"
+                    id="use-custom-images"
+                    checked={useCustomImages}
+                    onChange={(e) => setUseCustomImages(e.target.checked)}
+                    disabled={isRunning}
+                    className="w-4 h-4 rounded border-border"
+                  />
+                  <Label htmlFor="use-custom-images" className="text-sm font-medium cursor-pointer">
+                    Upload Custom Test Images
+                  </Label>
+                </div>
+                {useCustomImages && (
+                  <div>
+                    <Input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={(e) => {
+                        const files = e.target.files ? Array.from(e.target.files) : [];
+                        setTestImages(files);
+                      }}
+                      disabled={isRunning}
+                      className="text-xs"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Upload clean images (JPG, PNG). The attack will be applied to these.
+                      {testImages.length > 0 && ` (${testImages.length} selected)`}
+                    </p>
+                  </div>
+                )}
               </div>
               
               <div className="space-y-6">
@@ -608,6 +1019,98 @@ const ThreatAssessment = () => {
                   </Select>
                 </div>
 
+                {/* Custom Parameters Toggle */}
+                <div className="flex items-center gap-2 mb-3">
+                  <input
+                    type="checkbox"
+                    id="use-custom-params"
+                    checked={useCustomParams}
+                    onChange={(e) => setUseCustomParams(e.target.checked)}
+                    disabled={isRunning}
+                    className="w-4 h-4 rounded border-border"
+                  />
+                  <Label htmlFor="use-custom-params" className="text-sm font-medium cursor-pointer">
+                    Custom Parameters
+                  </Label>
+                </div>
+
+                {useCustomParams && (
+                  <div className="space-y-3 p-3 bg-secondary/30 rounded-lg mb-4">
+                    {selectedAttack === 'fgsm' && (
+                      <div>
+                        <Label className="text-xs text-muted-foreground mb-1 block">Epsilon (perturbation strength)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          max="0.5"
+                          value={customParams.epsilon}
+                          onChange={(e) => setCustomParams({ ...customParams, epsilon: parseFloat(e.target.value) || 0.03 })}
+                          disabled={isRunning}
+                          className="h-9"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">Recommended: 0.01 - 0.1</p>
+                      </div>
+                    )}
+                    {selectedAttack === 'pgd' && (
+                      <>
+                        <div>
+                          <Label className="text-xs text-muted-foreground mb-1 block">Epsilon (max perturbation)</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0.01"
+                            max="0.5"
+                            value={customParams.epsilon}
+                            onChange={(e) => setCustomParams({ ...customParams, epsilon: parseFloat(e.target.value) || 0.03 })}
+                            disabled={isRunning}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-muted-foreground mb-1 block">Alpha (step size)</Label>
+                          <Input
+                            type="number"
+                            step="0.001"
+                            min="0.001"
+                            max="0.1"
+                            value={customParams.alpha}
+                            onChange={(e) => setCustomParams({ ...customParams, alpha: parseFloat(e.target.value) || 0.01 })}
+                            disabled={isRunning}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-muted-foreground mb-1 block">Iterations</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={customParams.iterations}
+                            onChange={(e) => setCustomParams({ ...customParams, iterations: parseInt(e.target.value) || 10 })}
+                            disabled={isRunning}
+                            className="h-9"
+                          />
+                        </div>
+                      </>
+                    )}
+                    {selectedAttack === 'deepfool' && (
+                      <div>
+                        <Label className="text-xs text-muted-foreground mb-1 block">Max Iterations</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={customParams.iterations}
+                          onChange={(e) => setCustomParams({ ...customParams, iterations: parseInt(e.target.value) || 10 })}
+                          disabled={isRunning}
+                          className="h-9"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Run Button */}
                 <Button 
                   className="w-full gap-2 h-12" 
@@ -646,9 +1149,10 @@ const ThreatAssessment = () => {
           {/* Results Panel */}
           <div className="lg:col-span-2">
             <Tabs defaultValue="overview" className="w-full">
-              <TabsList className="grid w-full grid-cols-3 mb-6">
+              <TabsList className="grid w-full grid-cols-4 mb-6">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
                 <TabsTrigger value="details">Details</TabsTrigger>
+                <TabsTrigger value="defense">Defense</TabsTrigger>
                 <TabsTrigger value="info">Attack Info</TabsTrigger>
               </TabsList>
 
@@ -657,6 +1161,7 @@ const ThreatAssessment = () => {
                   <>
                     {/* Download Report Button */}
                     <div className="flex justify-end mb-4">
+                      <div className="flex flex-wrap gap-2 mb-4">
                       <Button 
                         onClick={downloadReport}
                         disabled={isDownloading}
@@ -666,15 +1171,32 @@ const ThreatAssessment = () => {
                         {isDownloading ? (
                           <>
                             <Loader2 className="w-4 h-4 animate-spin" />
-                            Generating Report...
+                            Generating...
                           </>
                         ) : (
                           <>
                             <Download className="w-4 h-4" />
-                            Download PDF Report
+                            PDF
                           </>
                         )}
                       </Button>
+                      <Button 
+                        onClick={exportAsJSON}
+                        variant="outline"
+                        className="gap-2"
+                      >
+                        <FileJson className="w-4 h-4" />
+                        JSON
+                      </Button>
+                      <Button 
+                        onClick={exportAsCSV}
+                        variant="outline"
+                        className="gap-2"
+                      >
+                        <FileSpreadsheet className="w-4 h-4" />
+                        CSV
+                      </Button>
+                      </div>
                     </div>
 
                     {/* Summary Cards */}
@@ -753,25 +1275,37 @@ const ThreatAssessment = () => {
                     </p>
                     
                     <div className="mt-6 p-4 bg-secondary/30 rounded-lg">
-                      <h4 className="font-medium mb-3">Recommendations</h4>
-                      <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li className="flex items-start gap-2">
-                          <span className="text-primary mt-0.5">•</span>
-                          <span>Implement adversarial training to improve model robustness</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="text-primary mt-0.5">•</span>
-                          <span>Add input validation and anomaly detection layers</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="text-primary mt-0.5">•</span>
-                          <span>Consider ensemble methods for better defense</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <span className="text-primary mt-0.5">•</span>
-                          <span>Monitor model performance continuously in production</span>
-                        </li>
-                      </ul>
+                      <h4 className="font-medium mb-3 flex items-center gap-2">
+                        Defense Recommendations
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          results.success_rate >= 70 ? 'bg-threat/20 text-threat' :
+                          results.success_rate >= 40 ? 'bg-accent/20 text-accent' :
+                          'bg-success/20 text-success'
+                        }`}>
+                          {results.success_rate >= 70 ? 'High Vulnerability' : results.success_rate >= 40 ? 'Medium Vulnerability' : 'Low Vulnerability'}
+                        </span>
+                      </h4>
+                      <div className="space-y-4">
+                        {getDefenseRecommendations(results.attack_type, results.success_rate).map((rec, idx) => (
+                          <div key={idx} className={`p-3 rounded-lg border ${
+                            rec.priority === 'high' ? 'bg-threat/5 border-threat/20' :
+                            rec.priority === 'medium' ? 'bg-accent/5 border-accent/20' :
+                            'bg-secondary/50 border-border'
+                          }`}>
+                            <div className="flex items-start gap-2">
+                              <span className={`mt-0.5 ${
+                                rec.priority === 'high' ? 'text-threat' :
+                                rec.priority === 'medium' ? 'text-accent' :
+                                'text-success'
+                              }`}>•</span>
+                              <div>
+                                <p className="font-medium text-sm text-foreground">{rec.title}</p>
+                                <p className="text-xs text-muted-foreground mt-1">{rec.description}</p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </Card>
                 ) : (
@@ -783,6 +1317,135 @@ const ThreatAssessment = () => {
                     </p>
                   </Card>
                 )}
+              </TabsContent>
+
+              <TabsContent value="defense" className="space-y-6">
+                <Card className="p-6">
+                  <h3 className="font-semibold text-lg mb-2 flex items-center gap-2">
+                    <Brain className="w-5 h-5 text-primary" />
+                    Adversarial Training
+                  </h3>
+                  <p className="text-sm text-muted-foreground mb-6">
+                    Train your model to be more robust against adversarial attacks by incorporating adversarial examples during training.
+                  </p>
+
+                  <div className="space-y-4">
+                    <div>
+                      <Label className="text-sm font-medium mb-2 block">Select Model to Train</Label>
+                      <Select value={trainingModelId} onValueChange={setTrainingModelId} disabled={isTraining}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Choose a custom model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {customModels.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              {model.name} {!model.is_trained && model.file_type && `(.${model.file_type})`}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Attack Type</Label>
+                        <Select value={trainingAttack} onValueChange={setTrainingAttack} disabled={isTraining}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="fgsm">FGSM</SelectItem>
+                            <SelectItem value="pgd">PGD</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Epochs</Label>
+                        <Input 
+                          type="number" 
+                          value={trainingEpochs}
+                          onChange={(e) => setTrainingEpochs(parseInt(e.target.value) || 3)}
+                          disabled={isTraining}
+                          min={1}
+                          max={10}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <Label className="text-sm font-medium mb-2 block">Epsilon (perturbation strength)</Label>
+                      <Input 
+                        type="number"
+                        step="0.01"
+                        value={trainingEpsilon}
+                        onChange={(e) => setTrainingEpsilon(parseFloat(e.target.value) || 0.03)}
+                        disabled={isTraining}
+                        min={0.01}
+                        max={0.1}
+                      />
+                    </div>
+
+                    <Button 
+                      onClick={runAdversarialTraining}
+                      disabled={isTraining || !trainingModelId}
+                      className="w-full gap-2"
+                    >
+                      {isTraining ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Training in Progress...
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-4 h-4" />
+                          Start Adversarial Training
+                        </>
+                      )}
+                    </Button>
+
+                    {trainingResult && (
+                      <div className={`p-4 rounded-lg ${trainingResult.success ? 'bg-success/10 border border-success/30' : 'bg-threat/10 border border-threat/30'}`}>
+                        <div className="flex items-center gap-2">
+                          {trainingResult.success ? (
+                            <CheckSquare className="w-5 h-5 text-success" />
+                          ) : (
+                            <XCircle className="w-5 h-5 text-threat" />
+                          )}
+                          <span className={trainingResult.success ? 'text-success' : 'text-threat'}>
+                            {trainingResult.message}
+                          </span>
+                        </div>
+                        {trainingResult.trained_model_id && (
+                          <p className="text-sm text-muted-foreground mt-2">
+                            New hardened model ID: {trainingResult.trained_model_id}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </Card>
+
+                <Card className="p-6">
+                  <h4 className="font-medium mb-3">How Adversarial Training Works</h4>
+                  <div className="space-y-3 text-sm text-muted-foreground">
+                    <div className="flex items-start gap-2">
+                      <span className="text-primary mt-0.5">1.</span>
+                      <span>Select a trained model from your uploaded models</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-primary mt-0.5">2.</span>
+                      <span>Choose attack type (FGSM or PGD) to generate adversarial examples</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-primary mt-0.5">3.</span>
+                      <span>Train the model on both clean AND adversarial examples</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="text-primary mt-0.5">4.</span>
+                      <span>Save a new "hardened" model that's more robust against attacks</span>
+                    </div>
+                  </div>
+                </Card>
               </TabsContent>
 
               <TabsContent value="info" className="space-y-6">
@@ -819,6 +1482,27 @@ const ThreatAssessment = () => {
                                 <p>• Finds minimal perturbation to change prediction</p>
                                 <p>• Iteratively moves toward decision boundary</p>
                                 <p>• More computationally intensive</p>
+                              </>
+                            )}
+                            {attack.id === 'bim' && (
+                              <>
+                                <p>• Basic Iterative Method - iterative version of FGSM</p>
+                                <p>• Applies FGSM multiple times with smaller steps</p>
+                                <p>• Often more effective than single-step FGSM</p>
+                              </>
+                            )}
+                            {attack.id === 'cw' && (
+                              <>
+                                <p>• Carlini-Wagner - optimization-based attack</p>
+                                <p>• Minimizes perturbation while maximizing success</p>
+                                <p>• More powerful but computationally expensive</p>
+                              </>
+                            )}
+                            {attack.id === 'hopskipjump' && (
+                              <>
+                                <p>• HopSkipJump - black-box boundary attack</p>
+                                <p>• Works without model gradients</p>
+                                <p>• Queries model to find decision boundary</p>
                               </>
                             )}
                           </div>

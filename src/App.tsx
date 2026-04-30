@@ -7,6 +7,7 @@ import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import Dashboard from "./components/Dashboard";
 import ThreatAssessment from "./pages/ThreatAssessment";
+import AttackVisualization from "./pages/AttackVisualization";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 const queryClient = new QueryClient();
@@ -32,6 +33,14 @@ const App = () => (
             element={
               <ProtectedRoute>
                 <ThreatAssessment />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/attack-visualization" 
+            element={
+              <ProtectedRoute>
+                <AttackVisualization />
               </ProtectedRoute>
             } 
           />

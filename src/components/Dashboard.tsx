@@ -1,8 +1,9 @@
 import { useAuth, useUser, UserButton } from "@clerk/clerk-react";
-import { Shield, Target, Database, Eye, Key, BarChart3, Settings, Bell, ArrowLeft, Home } from "lucide-react";
+import { Shield, Target, Database, Eye, Key, BarChart3, Settings, Bell, ArrowLeft, Home, TrendingUp, Activity, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 
 type Severity = "high" | "medium" | "low";
 type ModelStatus = "Active" | "Monitoring" | "Updating";
@@ -340,6 +341,13 @@ const Dashboard = () => {
     models: []
   });
   const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
+  const [historyChartData, setHistoryChartData] = useState<{date: string, successRate: number, attackType: string}[]>([]);
+
+  // Format date for chart
+  const formatChartDate = (isoDate: string) => {
+    const date = new Date(isoDate);
+    return `${date.getMonth() + 1}/${date.getDate()}`;
+  };
 
   useEffect(() => {
     let isActive = true;
@@ -354,7 +362,7 @@ const Dashboard = () => {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined
         });
 
-        const historyResponse = await fetch(`${API_BASE_URL}/api/history-records/recent?limit=3`, {
+        const historyResponse = await fetch(`${API_BASE_URL}/api/history-records/recent?limit=20`, {
           headers
         });
 
@@ -375,6 +383,19 @@ const Dashboard = () => {
             ...derived,
             alerts: historyAlerts.length > 0 ? historyAlerts : derived.alerts
           });
+        }
+
+        // Build chart data from history
+        if (isActive && historyData?.success && Array.isArray(historyData.history_records)) {
+          const chartData = historyData.history_records
+            .slice(0, 15)
+            .reverse()
+            .map((record: { timestamp: string; success_rate: number; attack_type: string }) => ({
+              date: formatChartDate(record.timestamp),
+              successRate: Math.round(record.success_rate),
+              attackType: record.attack_type
+            }));
+          setHistoryChartData(chartData);
         }
       } catch (error) {
         if (isActive) {
@@ -526,9 +547,91 @@ const Dashboard = () => {
                 <Key className="w-5 h-5" />
                 Configure Defenses
               </Button>
+              <Button variant="outline" className="w-full justify-start gap-3 h-12" onClick={() => navigate('/attack-visualization')}>
+                <Layers className="w-5 h-5" />
+                Attack Visualization
+              </Button>
             </div>
           </div>
         </div>
+
+        {/* History Charts Section */}
+        {historyChartData.length > 0 && (
+          <div className="mt-8">
+            <div className="threat-card rounded-2xl p-6">
+              <h2 className="text-xl font-bold mb-6 flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-primary" />
+                Attack Success Rate Over Time
+              </h2>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Line Chart */}
+                <div>
+                  <h3 className="text-sm font-medium text-muted-foreground mb-4">Trend</h3>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={historyChartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="date" stroke="#64748b" fontSize={12} />
+                        <YAxis stroke="#64748b" fontSize={12} domain={[0, 100]} />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px' }}
+                          labelStyle={{ color: '#0f172a', fontWeight: 'bold' }}
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="successRate" 
+                          stroke="#dc2626" 
+                          strokeWidth={2}
+                          dot={{ fill: '#dc2626', strokeWidth: 2 }}
+                          name="Success Rate %"
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Bar Chart by Attack Type */}
+                <div>
+                  <h3 className="text-sm font-medium text-muted-foreground mb-4">By Attack Type</h3>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={historyChartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="attackType" stroke="#64748b" fontSize={10} />
+                        <YAxis stroke="#64748b" fontSize={12} domain={[0, 100]} />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px' }}
+                          labelStyle={{ color: '#0f172a', fontWeight: 'bold' }}
+                        />
+                        <Bar dataKey="successRate" fill="#dc2626" name="Success Rate %" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+
+              {/* Stats Summary */}
+              <div className="mt-6 grid grid-cols-3 gap-4 p-4 bg-secondary/30 rounded-lg">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-primary">{historyChartData.length}</div>
+                  <div className="text-sm text-muted-foreground">Total Assessments</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-threat">
+                    {Math.round(historyChartData.reduce((sum, d) => sum + d.successRate, 0) / historyChartData.length)}%
+                  </div>
+                  <div className="text-sm text-muted-foreground">Avg Success Rate</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-success">
+                    {historyChartData.filter(d => d.successRate < 40).length}
+                  </div>
+                  <div className="text-sm text-muted-foreground">Low Risk Assessments</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Protected Models Section */}
         <div className="mt-8">

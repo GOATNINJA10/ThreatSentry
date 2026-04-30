@@ -93,6 +93,8 @@ CLERK_JWKS_CLIENT = PyJWKClient(CLERK_JWKS_URL) if CLERK_JWKS_URL else None
 
 # Directories
 ATTACK_IMAGES_FOLDER = os.path.join(os.path.dirname(__file__), 'attack')
+TEST_IMAGES_FOLDER = os.path.join(os.path.dirname(__file__), 'test_images')
+ADVERSARIAL_IMAGES_FOLDER = os.path.join(os.path.dirname(__file__), 'adversarial_images')
 MODELS_FOLDER = os.path.join(os.path.dirname(__file__), 'models')
 MODELS_METADATA_FILE = os.path.join(MODELS_FOLDER, 'models_metadata.json')
 HISTORY_RECORDS_FILE = os.path.join(MODELS_FOLDER, 'history_records.json')
@@ -433,21 +435,30 @@ def create_default_processor(input_size=224):
     
     return DefaultProcessor(input_size)
 
-def get_random_images(num_images=10):
-    """Get random images from the attack folder"""
+def get_random_images(num_images=10, use_custom=True):
+    """Get random images - prefers custom test images if available"""
+    image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.gif']
+    
+    # First try custom test images folder
+    if use_custom and os.path.exists(TEST_IMAGES_FOLDER):
+        custom_images = [f for f in os.listdir(TEST_IMAGES_FOLDER) 
+                        if os.path.splitext(f.lower())[1] in image_extensions]
+        if custom_images:
+            num_to_select = min(num_images, len(custom_images))
+            selected = random.sample(custom_images, num_to_select)
+            return [os.path.join(TEST_IMAGES_FOLDER, img) for img in selected]
+    
+    # Fall back to attack folder
     if not os.path.exists(ATTACK_IMAGES_FOLDER):
         os.makedirs(ATTACK_IMAGES_FOLDER)
         return []
     
-    # Get all image files
-    image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.gif']
     all_images = [f for f in os.listdir(ATTACK_IMAGES_FOLDER) 
                   if os.path.splitext(f.lower())[1] in image_extensions]
     
     if not all_images:
         return []
     
-    # Select random images
     num_to_select = min(num_images, len(all_images))
     selected_images = random.sample(all_images, num_to_select)
     
@@ -464,13 +475,89 @@ def resolve_prediction_label(label_map, class_index):
     return f"Class {class_index}"
 
 def resolve_attack_image_path(image_name):
-    """Resolve an attack image name to a local file path if it still exists."""
+    """Resolve an attack image name to a local file path - checks test_images first, then attack folder."""
     if not image_name:
         return None
 
     safe_name = os.path.basename(image_name)
+    
+    # Check test_images folder first (custom uploads)
+    candidate = os.path.join(TEST_IMAGES_FOLDER, safe_name)
+    if os.path.exists(candidate):
+        return candidate
+    
+    # Fall back to attack folder
     candidate = os.path.join(ATTACK_IMAGES_FOLDER, safe_name)
-    return candidate if os.path.exists(candidate) else None
+    if os.path.exists(candidate):
+        return candidate
+    
+    return None
+
+def get_defense_recommendations(attack_type: str, success_rate: float):
+    """Generate defense recommendations based on attack type and success rate"""
+    recommendations = []
+    attack = attack_type.upper()
+    is_high = success_rate >= 70
+    is_medium = success_rate >= 40
+    
+    # High priority recommendations for high vulnerability
+    if is_high:
+        recommendations.append(("HIGH PRIORITY", f"⚠️ CRITICAL: {success_rate:.1f}% attack success rate requires immediate action!"))
+        recommendations.append(("HIGH PRIORITY", "1. ADVERSARIAL TRAINING - Train model with adversarial examples"))
+        recommendations.append(("DETAIL", "   • Use libraries like ART (Adversarial Robustness Toolbox)"))
+        recommendations.append(("DETAIL", f"   • Generate {attack} examples and include in training data"))
+        recommendations.append(("HIGH PRIORITY", "2. INPUT PREPROCESSING - Sanitize inputs before prediction"))
+        recommendations.append(("DETAIL", "   • Apply JPEG compression, bit-depth reduction"))
+        recommendations.append(("DETAIL", "   • Use spatial smoothing to neutralize perturbations"))
+    
+    # Attack-specific recommendations
+    if attack == 'FGSM':
+        recommendations.append(("", f"\n📋 FGSM-SPECIFIC DEFENSES (Attack: {attack})"))
+        recommendations.append(("MEDIUM", "• Defensive Distillation - Use temperature scaling (T=10-30)"))
+        recommendations.append(("DETAIL", "  Softens gradients, harder to craft attacks"))
+        recommendations.append(("MEDIUM", "• Feature Squeezing - Reduce color depth, compare predictions"))
+        recommendations.append(("DETAIL", "  Detects adversarial inputs by difference in predictions"))
+    elif attack == 'PGD':
+        recommendations.append(("", f"\n📋 PGD-SPECIFIC DEFENSES (Attack: {attack})"))
+        recommendations.append(("MEDIUM", "• Randomized Resizing - Random size/padding during inference"))
+        recommendations.append(("DETAIL", "  PGD relies on exact input, randomization breaks it"))
+        recommendations.append(("MEDIUM", "• Label Smoothing - Use 0.9 confidence instead of 1.0"))
+        recommendations.append(("DETAIL", "  Makes targeted attacks harder"))
+    elif attack == 'DEEPFOOL':
+        recommendations.append(("", f"\n📋 DEEPFOOL-SPECIFIC DEFENSES (Attack: {attack})"))
+        recommendations.append(("MEDIUM", "• Certified Robustness - Use IBP/CROWN for guaranteed bounds"))
+        recommendations.append(("DETAIL", "  Provides mathematical guarantees"))
+        recommendations.append(("MEDIUM", "• Gradient Regularization - Add gradient loss during training"))
+        recommendations.append(("DETAIL", "  Makes decision boundaries less sensitive"))
+    elif attack == 'BIM':
+        recommendations.append(("", f"\n📋 BIM-SPECIFIC DEFENSES (Attack: {attack})"))
+        recommendations.append(("MEDIUM", "• Input Transformation - JPEG compression, bit depth reduction"))
+        recommendations.append(("DETAIL", "  Breaks iterative perturbations"))
+        recommendations.append(("MEDIUM", "• Stochastic Edge Networks - Add randomness to edges"))
+        recommendations.append(("DETAIL", "  Defeats iterative attacks"))
+    elif attack == 'CW' or attack == 'C&W':
+        recommendations.append(("", f"\n📋 C&W-SPECIFIC DEFENSES (Attack: {attack})"))
+        recommendations.append(("HIGH", "• Provable Defenses - Use certified robust training"))
+        recommendations.append(("DETAIL", "  C&W is very strong, need certified guarantees"))
+        recommendations.append(("HIGH", "• Randomization Defense - Add input noise"))
+        recommendations.append(("DETAIL", "  Breaks optimization-based attacks"))
+    elif attack == 'HOPSKIPJUMP' or attack == 'HSJ':
+        recommendations.append(("", f"\n📋 HOPSKIPJUMP-SPECIFIC DEFENSES (Attack: {attack})"))
+        recommendations.append(("MEDIUM", "• Query Detection - Monitor model query patterns"))
+        recommendations.append(("DETAIL", "  Black-box attacks make many queries"))
+        recommendations.append(("MEDIUM", "• Rate Limiting - Limit queries per IP/user"))
+        recommendations.append(("DETAIL", "  Slows down black-box attackers"))
+    
+    # Universal recommendations
+    recommendations.append(("", "\n🛡️ UNIVERSAL DEFENSES (All attack types)"))
+    recommendations.append(("HIGH" if is_medium else "MEDIUM", "• Ensemble Defense - Combine multiple architectures"))
+    recommendations.append(("DETAIL", "  Attack success on one model often fails on others"))
+    recommendations.append(("MEDIUM", "• Detection Layer - Binary classifier for adversarial inputs"))
+    recommendations.append(("DETAIL", "  Train on both clean and adversarial examples"))
+    recommendations.append(("LOW", "• Continuous Monitoring - Track prediction patterns in production"))
+    recommendations.append(("DETAIL", "  Alert on sudden accuracy drops or unusual patterns"))
+    
+    return recommendations
 
 class AdversarialAttacks:
     def __init__(self, model, processor):
@@ -624,6 +711,103 @@ class AdversarialAttacks:
         
         return perturbed_image
     
+    def bim_attack(self, image_tensor, epsilon=0.03, alpha=0.01, num_iter=10):
+        """
+        Basic Iterative Method (BIM) / Iterative FGSM Attack
+        Simpler version of PGD with fixed step size
+        """
+        image_tensor = image_tensor.to(device)
+        original_image = image_tensor.clone().detach()
+        perturbed_image = image_tensor.clone().detach()
+        
+        for i in range(num_iter):
+            perturbed_image.requires_grad = True
+            outputs = self.model(perturbed_image)
+            loss = F.cross_entropy(outputs.logits, outputs.logits.argmax(dim=1))
+            
+            self.model.zero_grad()
+            loss.backward()
+            
+            with torch.no_grad():
+                sign_grad = perturbed_image.grad.data.sign()
+                perturbed_image = perturbed_image + alpha * sign_grad
+                # Project back to epsilon ball
+                perturbation = torch.clamp(perturbed_image - original_image, -epsilon, epsilon)
+                perturbed_image = torch.clamp(original_image + perturbation, 0, 1)
+            
+            perturbed_image = perturbed_image.detach()
+        
+        return perturbed_image
+    
+    def cw_attack(self, image_tensor, epsilon=0.03, max_iter=50, lr=0.01, target_class=None):
+        """
+        Carlini-Wagner (C&W) L2 Attack
+        More powerful but computationally expensive
+        """
+        image_tensor = image_tensor.to(device)
+        
+        # Get target class (if None, use least likely class)
+        with torch.no_grad():
+            outputs = self.model(image_tensor)
+            if target_class is None:
+                target_class = outputs.logits.argmin(dim=1)
+        
+        # Initialize
+        perturbation = torch.zeros_like(image_tensor, requires_grad=True)
+        optimizer = torch.optim.Adam([perturbation], lr=lr)
+        
+        for _ in range(max_iter):
+            adv_image = torch.clamp(image_tensor + perturbation, 0, 1)
+            outputs = self.model(adv_image)
+            
+            # C&W loss: minimize perturbation while maximizing target class confidence
+            target_conf = outputs.logits[0, target_class]
+            max_other_conf = outputs.logits[0].scatter(0, target_class.unsqueeze(0), -float('inf')).max()
+            
+            # Loss = perturbation + confidence difference
+            loss = torch.norm(perturbation) + F.relu(max_other_conf - target_conf + 0.5)
+            
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        
+        return torch.clamp(image_tensor + perturbation.detach(), 0, 1)
+    
+    def hopskipjump_attack(self, image_tensor, epsilon=0.03, max_iter=10, num_dir=100):
+        """
+        HopSkipJump Attack - Black-box attack (query-based)
+        This is a simplified version that works with gradients for demonstration
+        """
+        image_tensor = image_tensor.to(device)
+        perturbed_image = image_tensor.clone().detach()
+        
+        for _ in range(max_iter):
+            # Generate random directions
+            noise = torch.randn(num_dir, *image_tensor.shape[1:], device=device)
+            noise = noise / noise.view(num_dir, -1).norm(dim=1, keepdim=True).view(num_dir, 1, 1, 1)
+            
+            # Evaluate each direction (simplified for demonstration)
+            best_dir = None
+            best_score = -float('inf')
+            
+            for d in noise[:10]:  # Sample a few directions
+                test_img = perturbed_image + epsilon * d.unsqueeze(0)
+                test_img = torch.clamp(test_img, 0, 1)
+                
+                with torch.no_grad():
+                    outputs = self.model(test_img)
+                    score = outputs.logits.max() - outputs.logits.gather(1, outputs.logits.argmax(dim=1, keepdim=True)).item()
+                
+                if score > best_score:
+                    best_score = score
+                    best_dir = d
+            
+            if best_dir is not None:
+                with torch.no_grad():
+                    perturbed_image = torch.clamp(perturbed_image + epsilon * best_dir.unsqueeze(0), 0, 1)
+        
+        return perturbed_image
+    
     def evaluate_attack(self, original_image, adversarial_image):
         """
         Evaluate the success of the attack
@@ -758,6 +942,14 @@ def threat_assessment():
         total_adv_acc = 0
         image_results = []
         
+        # Clear old adversarial images folder before processing
+        if not os.path.exists(ADVERSARIAL_IMAGES_FOLDER):
+            os.makedirs(ADVERSARIAL_IMAGES_FOLDER)
+        for f in os.listdir(ADVERSARIAL_IMAGES_FOLDER):
+            fpath = os.path.join(ADVERSARIAL_IMAGES_FOLDER, f)
+            if os.path.isfile(fpath):
+                os.remove(fpath)
+        
         for idx, image_path in enumerate(image_paths, 1):
             try:
                 print(f"\n🖼️  Processing image {idx}/{len(image_paths)}: {os.path.basename(image_path)}")
@@ -780,6 +972,12 @@ def threat_assessment():
                     adversarial_image = attacker.pgd_attack(image_tensor)
                 elif attack_type == 'deepfool':
                     adversarial_image = attacker.deepfool_attack(image_tensor)
+                elif attack_type == 'bim':
+                    adversarial_image = attacker.bim_attack(image_tensor)
+                elif attack_type == 'cw':
+                    adversarial_image = attacker.cw_attack(image_tensor)
+                elif attack_type == 'hopskipjump':
+                    adversarial_image = attacker.hopskipjump_attack(image_tensor)
                 else:
                     return jsonify({'error': 'Invalid attack type'}), 400
                 
@@ -797,8 +995,22 @@ def threat_assessment():
                 total_original_acc += original_accuracy
                 total_adv_acc += adversarial_accuracy
                 
+                # Save adversarial image for PDF report
+                base_name = os.path.splitext(os.path.basename(image_path))[0]
+                adv_tensor = adversarial_image[0].cpu()
+                
+                # Tensor is already in [0, 1] range (clamped by attack), so just scale to [0, 255]
+                # Ensure values are in valid range
+                adv_tensor = torch.clamp(adv_tensor, 0, 1)
+                adv_array = (adv_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+                adv_image_pil = Image.fromarray(adv_array)
+                adv_image_path = os.path.join(ADVERSARIAL_IMAGES_FOLDER, f"{base_name}_adv.png")
+                adv_image_pil.save(adv_image_path)
+                print(f"   💾 Saved adversarial image: {adv_image_path}")
+                
                 image_results.append({
                     'image_name': os.path.basename(image_path),
+                    'adversarial_image_name': f"{base_name}_adv.png",
                     'success': eval_results['success'],
                     'original_pred': eval_results['original_pred'],
                     'original_label': resolve_prediction_label(label_map, eval_results['original_pred']),
@@ -1055,65 +1267,69 @@ def generate_report_pdf(results, model_id):
         pdf.savefig(fig, bbox_inches='tight')
         plt.close()
 
-        # Pages 3+: Detailed per-image evidence
+        # Pages 3+: Detailed per-image evidence - showing original AND adversarial side by side
         if image_results:
-            images_per_page = 4
+            images_per_page = 2
             for start in range(0, len(image_results), images_per_page):
                 page_results = image_results[start:start + images_per_page]
-                fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
-                axes = axes.flatten()
+                fig, axes = plt.subplots(len(page_results), 2, figsize=(11, 8.5))
+                if len(page_results) == 1:
+                    axes = axes.reshape(1, -1)
                 add_page_header(
                     fig,
-                    'Image Evidence and Predictions',
+                    'Image Evidence - Original vs Adversarial',
                     f"Images {start + 1}-{start + len(page_results)} of {len(image_results)}"
                 )
 
-                for ax, image_result in zip(axes, page_results):
-                    ax.set_facecolor('#f8fafc')
-                    for spine in ax.spines.values():
-                        spine.set_edgecolor('#cbd5e1')
-                        spine.set_linewidth(1.0)
-
+                for row, (ax_orig, ax_adv), image_result in zip(range(len(page_results)), axes, page_results):
+                    # Left side - Original image
+                    ax_orig.set_facecolor('#f8fafc')
                     image_path = resolve_attack_image_path(image_result.get('image_name'))
                     if image_path:
                         try:
                             with Image.open(image_path) as source_image:
                                 preview = source_image.convert('RGB')
-                                preview.thumbnail((260, 180))
-                                ax.imshow(preview)
+                                # Use resize with LANCZOS for better quality, larger size
+                                preview = preview.resize((320, 240), Image.Resampling.LANCZOS)
+                                ax_orig.imshow(preview)
                         except Exception:
-                            ax.text(0.5, 0.68, 'Image preview unavailable', ha='center', va='center',
-                                    fontsize=10, color='#64748b', transform=ax.transAxes)
+                            ax_orig.text(0.5, 0.5, 'Image unavailable', ha='center', va='center',
+                                    fontsize=10, color='#64748b', transform=ax_orig.transAxes)
                     else:
-                        ax.text(0.5, 0.68, 'Image preview unavailable', ha='center', va='center',
-                                fontsize=10, color='#64748b', transform=ax.transAxes)
+                        ax_orig.text(0.5, 0.5, 'Image unavailable', ha='center', va='center',
+                                fontsize=10, color='#64748b', transform=ax_orig.transAxes)
+                    ax_orig.set_title(f"Original: {image_result.get('original_label', 'N/A')}\n({image_result.get('original_confidence', 0):.1f}%)", 
+                                     fontsize=10, fontweight='bold', color='#16a34a')
+                    ax_orig.set_xticks([])
+                    ax_orig.set_yticks([])
 
-                    ax.set_xticks([])
-                    ax.set_yticks([])
-
-                    success_text = 'Attack Successful' if image_result.get('success') else 'Attack Blocked'
+                    # Right side - Adversarial image
+                    ax_adv.set_facecolor('#f8fafc')
+                    adv_image_name = image_result.get('adversarial_image_name')
+                    if adv_image_name:
+                        adv_path = os.path.join(ADVERSARIAL_IMAGES_FOLDER, adv_image_name)
+                        if os.path.exists(adv_path):
+                            try:
+                                with Image.open(adv_path) as adv_img:
+                                    adv_preview = adv_img.convert('RGB')
+                                    adv_preview = adv_preview.resize((320, 240), Image.Resampling.LANCZOS)
+                                    ax_adv.imshow(adv_preview)
+                            except Exception:
+                                ax_adv.text(0.5, 0.5, 'Adversarial image\nunavailable', ha='center', va='center',
+                                        fontsize=10, color='#64748b', transform=ax_adv.transAxes)
+                        else:
+                            ax_adv.text(0.5, 0.5, 'Adversarial image\nunavailable', ha='center', va='center',
+                                    fontsize=10, color='#64748b', transform=ax_adv.transAxes)
+                    else:
+                        ax_adv.text(0.5, 0.5, 'Adversarial image\nunavailable', ha='center', va='center',
+                                fontsize=10, color='#64748b', transform=ax_adv.transAxes)
+                    
+                    success_text = 'ATTACK SUCCESSFUL' if image_result.get('success') else 'ATTACK BLOCKED'
                     success_color = '#dc2626' if image_result.get('success') else '#16a34a'
-                    original_label = image_result.get('original_label') or f"Class {image_result.get('original_pred', 'N/A')}"
-                    adversarial_label = image_result.get('adversarial_label') or f"Class {image_result.get('adversarial_pred', 'N/A')}"
-                    details_lines = [
-                        f"Original image: {image_result.get('image_name', 'Unknown')}",
-                        f"Adversarial image: {image_result.get('image_name', 'Unknown')} (attacked)",
-                        f"Outcome: {success_text}",
-                        f"Model predicted as: {original_label}",
-                        f"Original confidence: {image_result.get('original_confidence', 0):.2f}%",
-                        f"After attack predicted as: {adversarial_label}",
-                        f"Adversarial confidence: {image_result.get('adversarial_confidence', 0):.2f}%"
-                    ]
-
-                    ax.add_patch(plt.Rectangle((0, 0), 1, 0.28, transform=ax.transAxes,
-                                               facecolor='white', edgecolor='#e2e8f0', linewidth=0.8))
-                    ax.text(0.03, 0.24, success_text, transform=ax.transAxes, fontsize=10.5,
-                            fontweight='bold', color=success_color, va='top')
-                    ax.text(0.03, 0.19, "\n".join(textwrap.fill(line, 38) for line in details_lines),
-                            transform=ax.transAxes, fontsize=8.8, color='#334155', va='top')
-
-                for ax in axes[len(page_results):]:
-                    ax.axis('off')
+                    ax_adv.set_title(f"Adversarial: {image_result.get('adversarial_label', 'N/A')}\n({image_result.get('adversarial_confidence', 0):.1f}%)\n{success_text}", 
+                                     fontsize=10, fontweight='bold', color=success_color)
+                    ax_adv.set_xticks([])
+                    ax_adv.set_yticks([])
 
                 plt.tight_layout(rect=[0, 0.05, 1, 0.90])
                 add_footer(fig)
@@ -1122,44 +1338,54 @@ def generate_report_pdf(results, model_id):
 
         # Final page: Detailed Results and Recommendations
         fig = plt.figure(figsize=(11, 8.5))
-        add_page_header(fig, 'Recommendations', 'Security actions based on observed threat exposure')
+        add_page_header(fig, 'Defense Recommendations', 'Security actions based on observed threat exposure')
 
         plt.text(0.06, 0.84, 'Assessment Summary', fontsize=15, fontweight='bold', color='#0f172a')
         plt.text(0.06, 0.79, textwrap.fill(details_text, 118), fontsize=10, color='#334155', va='top')
 
-        plt.text(0.06, 0.61, 'Security Recommendations', fontsize=15, fontweight='bold', color='#0f172a')
+        # Dynamic recommendations based on attack type and success rate
+        plt.text(0.06, 0.61, 'Defense Recommendations', fontsize=15, fontweight='bold', color='#0f172a')
         
-        recommendations = [
-            "1. Implement Adversarial Training",
-            "   • Retrain your model with adversarial examples to improve robustness",
-            "   • Use techniques like FGSM, PGD during training phase",
-            "",
-            "2. Add Input Validation & Preprocessing",
-            "   • Implement input sanitization and anomaly detection",
-            "   • Use defensive distillation or feature squeezing",
-            "",
-            "3. Deploy Ensemble Methods",
-            "   • Use multiple models with different architectures",
-            "   • Implement voting mechanisms for predictions",
-            "",
-            "4. Continuous Monitoring",
-            "   • Set up real-time performance monitoring",
-            "   • Detect and alert on unusual prediction patterns",
-            "",
-            "5. Regular Security Audits",
-            "   • Conduct periodic threat assessments",
-            "   • Stay updated with latest attack techniques"
-        ]
+        # Get vulnerability badge
+        if results['success_rate'] >= 70:
+            vuln_level = "🔴 HIGH VULNERABILITY"
+            vuln_color = '#dc2626'
+        elif results['success_rate'] >= 40:
+            vuln_level = "🟡 MEDIUM VULNERABILITY"
+            vuln_color = '#f59e0b'
+        else:
+            vuln_level = "🟢 LOW VULNERABILITY"
+            vuln_color = '#16a34a'
         
-        y_pos = 0.55
-        for rec in recommendations:
-            if rec.startswith('   '):
-                plt.text(0.10, y_pos, rec.replace('â€¢', '•'), fontsize=9.2, color='#334155')
-            elif rec:
-                plt.text(0.06, y_pos, rec, fontsize=10.5, fontweight='bold', color='#0f172a')
+        plt.text(0.06, 0.565, vuln_level, fontsize=12, fontweight='bold', color=vuln_color)
+        
+        recommendations = get_defense_recommendations(results['attack_type'], results['success_rate'])
+        
+        y_pos = 0.51
+        for priority, rec in recommendations:
+            if priority == 'DETAIL':
+                plt.text(0.08, y_pos, rec, fontsize=8.5, color='#64748b', style='italic')
+                y_pos -= 0.025
+            elif priority == 'HIGH PRIORITY':
+                plt.text(0.06, y_pos, rec, fontsize=10, fontweight='bold', color='#dc2626')
+                y_pos -= 0.03
+            elif priority == 'HIGH':
+                plt.text(0.06, y_pos, rec, fontsize=10, fontweight='bold', color='#dc2626')
+                y_pos -= 0.025
+            elif priority == 'MEDIUM':
+                plt.text(0.06, y_pos, rec, fontsize=9.5, fontweight='bold', color='#f59e0b')
+                y_pos -= 0.025
+            elif priority == 'LOW':
+                plt.text(0.06, y_pos, rec, fontsize=9.5, fontweight='bold', color='#16a34a')
+                y_pos -= 0.025
+            elif rec.startswith('\n'):
+                y_pos -= 0.02
+                plt.text(0.06, y_pos, rec.strip(), fontsize=10, fontweight='bold', color='#0f172a')
+                y_pos -= 0.025
             else:
-                y_pos -= 0.01
-            y_pos -= 0.03
+                plt.text(0.06, y_pos, rec, fontsize=9, color='#334155')
+                y_pos -= 0.02
+            y_pos -= 0.01
 
         add_footer(fig)
         plt.axis('off')
@@ -1369,6 +1595,51 @@ def upload_model():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+# Test images folder
+TEST_IMAGES_FOLDER = os.path.join(os.path.dirname(__file__), 'test_images')
+
+@app.route('/api/test-images/upload', methods=['POST'])
+@require_clerk_auth
+def upload_test_images():
+    """Upload test images for threat assessment"""
+    try:
+        if 'files' not in request.files:
+            return jsonify({'error': 'No files provided'}), 400
+        
+        files = request.files.getlist('files')
+        
+        if not files or all(f.filename == '' for f in files):
+            return jsonify({'error': 'No files selected'}), 400
+        
+        # Ensure test_images folder exists
+        if not os.path.exists(TEST_IMAGES_FOLDER):
+            os.makedirs(TEST_IMAGES_FOLDER)
+        
+        # Clear existing test images
+        for f in os.listdir(TEST_IMAGES_FOLDER):
+            fpath = os.path.join(TEST_IMAGES_FOLDER, f)
+            if os.path.isfile(fpath):
+                os.remove(fpath)
+        
+        saved_files = []
+        for file in files:
+            if file.filename:
+                filename = secure_filename(file.filename)
+                filepath = os.path.join(TEST_IMAGES_FOLDER, filename)
+                file.save(filepath)
+                saved_files.append(filename)
+                print(f"✅ Saved test image: {filename}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'{len(saved_files)} test images uploaded',
+            'files': saved_files
+        })
+    
+    except Exception as e:
+        print(f"❌ Error uploading test images: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/models/list', methods=['GET'])
 @require_clerk_auth
 def list_models():
@@ -1474,6 +1745,162 @@ def get_model_info(model_id):
     
     except Exception as e:
         print(f"❌ Error getting model info: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/adversarial-training', methods=['POST'])
+@require_clerk_auth
+def run_adversarial_training():
+    """Train a model to be more robust using adversarial training"""
+    try:
+        data = request.get_json()
+        model_id = data.get('model_id')
+        attack_type = data.get('attack_type', 'fgsm')
+        epochs = data.get('epochs', 3)
+        epsilon = data.get('epsilon', 0.03)
+        
+        if not model_id:
+            return jsonify({'error': 'model_id is required'}), 400
+        
+        # Get model from metadata
+        metadata = load_models_metadata()
+        if model_id not in metadata:
+            return jsonify({'error': 'Model not found'}), 404
+        
+        model_info = metadata[model_id]
+        model_path = os.path.join(MODELS_FOLDER, model_info['filename'])
+        
+        if not os.path.exists(model_path):
+            return jsonify({'error': 'Model file not found'}), 404
+        
+        # Load model
+        print(f"🧠 Starting adversarial training for {model_id}")
+        print(f"   Attack: {attack_type.upper()}, Epochs: {epochs}, Epsilon: {epsilon}")
+        
+        # Load the custom model
+        file_ext = model_info.get('file_type', 'pt')
+        if file_ext in ['pt', 'pth']:
+            model = load_custom_pytorch_model(model_path, model_info.get('num_classes', 1000), model_info.get('input_size', 224))
+        elif file_ext in ['h5', 'keras']:
+            model = load_custom_keras_model(model_path)
+        else:
+            return jsonify({'error': 'Unsupported model type'}), 400
+        
+        # Get training images
+        image_paths = get_random_images(num_images=min(20, 10), use_custom=True)
+        if not image_paths:
+            image_paths = get_random_images(num_images=10, use_custom=False)
+        
+        if not image_paths:
+            return jsonify({'error': 'No training images available'}), 400
+        
+        # Simple adversarial training (one epoch demo)
+        # In production, this would be a full training loop
+        model.train()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
+        
+        total_loss = 0
+        num_batches = 0
+        
+        for epoch in range(epochs):
+            for image_path in image_paths[:5]:  # Use subset for speed
+                try:
+                    image = Image.open(image_path).convert('RGB')
+                    inputs = processor(images=image, return_tensors="pt", padding=True)
+                    image_tensor = inputs['pixel_values']
+                    
+                    # Get original prediction
+                    outputs = model(image_tensor.to(device))
+                    target_class = outputs.logits.argmax(dim=1)
+                    
+                    # Generate adversarial example
+                    image_tensor.requires_grad = True
+                    outputs = model(image_tensor)
+                    loss = F.cross_entropy(outputs.logits, target_class)
+                    
+                    optimizer.zero_grad()
+                    loss.backward()
+                    
+                    # Create adversarial example for training
+                    if attack_type == 'fgsm':
+                        perturbed = image_tensor + epsilon * image_tensor.grad.data.sign()
+                    elif attack_type == 'pgd':
+                        perturbed = image_tensor.clone().detach()
+                        for _ in range(3):
+                            perturbed.requires_grad = True
+                            out = model(perturbed)
+                            l = F.cross_entropy(out.logits, target_class)
+                            l.backward()
+                            with torch.no_grad():
+                                perturbed = perturbed + 0.01 * perturbed.grad.sign()
+                                perturbed = torch.clamp(perturbed, 0, 1)
+                    else:
+                        perturbed = image_tensor
+                    
+                    # Train on adversarial example
+                    perturbed = perturbed.detach()
+                    adv_outputs = model(perturbed.to(device))
+                    adv_loss = F.cross_entropy(adv_outputs.logits, target_class)
+                    
+                    # Combined loss
+                    combined_loss = 0.5 * loss + 0.5 * adv_loss
+                    
+                    optimizer.zero_grad()
+                    combined_loss.backward()
+                    optimizer.step()
+                    
+                    total_loss += combined_loss.item()
+                    num_batches += 1
+                    
+                except Exception as e:
+                    print(f"   ⚠️ Error on image {os.path.basename(image_path)}: {str(e)}")
+                    continue
+        
+        avg_loss = total_loss / max(num_batches, 1)
+        
+        # Save the trained model
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        trained_filename = f"trained_{timestamp}_{model_info['filename']}"
+        trained_path = os.path.join(MODELS_FOLDER, trained_filename)
+        
+        if file_ext in ['pt', 'pth']:
+            torch.save(model.state_dict(), trained_path)
+        
+        # Save metadata
+        trained_model_id = f"trained_{timestamp}"
+        metadata[trained_model_id] = {
+            'name': f"{model_info['name']} (Hardened)",
+            'description': f"Adversarial trained using {attack_type.upper()}, {epochs} epochs",
+            'filename': trained_filename,
+            'original_filename': model_info.get('original_filename', trained_filename),
+            'file_type': file_ext,
+            'num_classes': model_info.get('num_classes', 1000),
+            'input_size': model_info.get('input_size', 224),
+            'upload_date': datetime.now().isoformat(),
+            'is_trained': True,
+            'training_config': {
+                'attack_type': attack_type,
+                'epochs': epochs,
+                'epsilon': epsilon
+            }
+        }
+        save_models_metadata(metadata)
+        
+        print(f"✅ Adversarial training completed!")
+        print(f"   Avg training loss: {avg_loss:.4f}")
+        print(f"   Model saved as: {trained_model_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Adversarial training completed',
+            'trained_model_id': trained_model_id,
+            'training_loss': avg_loss,
+            'epochs': epochs
+        })
+    
+    except Exception as e:
+        print(f"❌ Error in adversarial training: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
